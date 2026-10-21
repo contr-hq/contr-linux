@@ -1,21 +1,19 @@
 use std::time::SystemTime;
 
 use contr_core::{paths, product};
-use contr_daemon_ui::{Daemon, EngineAction, Status, describe, engine_kind};
+use contr_daemon_ui::{Daemon, EngineAction, Status, describe, engine_kind, remediation_label, run_remediation};
 use contr_sdk::api::common::v1::Remediation;
 use contr_sdk::api::containers::v1::{ContainerState, ListContainersRequest, PruneContainersRequest};
 use contr_sdk::api::daemon::v1::Capability;
-use contr_sdk::api::diagnostics::v1::{
-    Check, CheckStatus, RunChecksRequest, RunRemediationRequest, run_remediation_response,
-};
+use contr_sdk::api::diagnostics::v1::{Check, CheckStatus, RunChecksRequest};
 use contr_sdk::api::engine::v1::{EngineState, ResetRequest, ResetScope, reset_response};
 use contr_sdk::api::images::v1::{ListImagesRequest, PruneImagesRequest};
 use contr_sdk::api::settings::v1::ResetSettingsRequest;
 use contr_sdk::{Client, Error};
-use contr_ui_common::format;
 use contr_ui_common::widgets::{GroupHeader, boxed_list, page_column, set_status, status_icon};
+use contr_ui_common::{format, session};
 use relm4::adw::{self, prelude::*};
-use relm4::gtk::{self, gio, glib};
+use relm4::gtk::{self, glib};
 use relm4::{Component, ComponentParts, ComponentSender};
 
 use crate::model::{self, Problem};
@@ -446,32 +444,16 @@ impl TroubleshootPage {
 
     fn fix(&mut self, sender: &ComponentSender<Self>, remediation: Remediation) {
         let Some(client) = self.client() else { return };
-        self.fixing = Some(format!(
-            "{}…",
-            model::remediation_label(&remediation).trim_end_matches('…')
-        ));
+        self.fixing = Some(format!("{}…", remediation_label(&remediation).trim_end_matches('…')));
         let out = sender.command_sender().clone();
         relm4::spawn(async move {
-            let result = async {
-                let request = RunRemediationRequest {
-                    action_id: remediation.action_id,
-                };
-                let mut stream = client.diagnostics().run_remediation(request).await?.into_inner();
-                while let Some(response) = stream.message().await? {
-                    match response.event {
-                        Some(run_remediation_response::Event::Progress(progress)) => {
-                            out.emit(TroubleshootCmd::FixProgress(progress.message));
-                        }
-                        Some(run_remediation_response::Event::Outcome(outcome)) => {
-                            return Ok((outcome.logout_required, outcome.restart_required));
-                        }
-                        None => {}
-                    }
-                }
-                Ok((false, false))
-            }
-            .await;
-            out.emit(TroubleshootCmd::Fixed(result.map_err(|error: Error| describe(&error))));
+            let result = run_remediation(client, &remediation, |progress| {
+                out.emit(TroubleshootCmd::FixProgress(progress.message));
+            })
+            .await
+            .map(|outcome| (outcome.logout_required, outcome.restart_required))
+            .map_err(|error| describe(&error));
+            out.emit(TroubleshootCmd::Fixed(result));
         });
     }
 
@@ -583,7 +565,7 @@ impl TroubleshootPage {
             .unwrap_or_default();
         for (index, remediation) in remediations.iter().enumerate() {
             let button = gtk::Button::builder()
-                .label(model::remediation_label(remediation))
+                .label(remediation_label(remediation))
                 .css_classes(["pill"])
                 .build();
             if index == 0 {
@@ -668,7 +650,7 @@ fn check_row(check: &Check, input: &relm4::Sender<TroubleshootMsg>, fixing: bool
     };
     for remediation in remediations {
         let button = gtk::Button::builder()
-            .label(model::remediation_label(remediation))
+            .label(remediation_label(remediation))
             .valign(gtk::Align::Center)
             .sensitive(!fixing)
             .css_classes(["raised-button"])
@@ -732,26 +714,10 @@ fn confirm(
     dialog.present(Some(parent));
 }
 
-/// Asks GNOME's session manager to log out; it shows its own confirmation.
 fn log_out(root: &adw::ToastOverlay) {
     let root = root.clone();
     glib::spawn_future_local(async move {
-        let result = async {
-            let bus = gio::bus_get_future(gio::BusType::Session).await?;
-            bus.call_future(
-                Some("org.gnome.SessionManager"),
-                "/org/gnome/SessionManager",
-                "org.gnome.SessionManager",
-                "Logout",
-                Some(&(0_u32,).to_variant()),
-                None,
-                gio::DBusCallFlags::NONE,
-                -1,
-            )
-            .await
-        }
-        .await;
-        if result.is_err() {
+        if session::log_out().await.is_err() {
             root.add_toast(adw::Toast::new("Log out from the system menu to finish"));
         }
     });
