@@ -79,6 +79,16 @@ open project to its page. A project page runs `RunAction` for Up, Pull, Restart,
 output lines while it runs and its last lines in a dialog when it fails. Logs follow the project's `StreamLogs`,
 filtered by service, and restart when the set of running containers changes.
 
+## Kubernetes
+
+`contr-kubernetes` follows `KubernetesService.WatchCluster` and `SettingsService.WatchSettings` while the engine runs.
+The Enabled switch, Version and Traefik are the settings `kubernetes.enabled`, `kubernetes.version` and
+`kubernetes.traefik`; Cancel during start-up turns `kubernetes.enabled` off. After `UpdateSettings` the page keeps the
+change pending until a cluster state carries the returned etag or a later one. A version change deletes the cluster's
+data, so it asks first, as Reset does. The kubectl context switch calls `SetCurrentContext`, and Import Images
+streams `ImportImages` for the tagged images the engine holds. The sidebar shows a dot while the cluster is ready and
+a spinner while it starts or stops, and a notification says when a start finishes while the window is not focused.
+
 ## Troubleshoot
 
 `contr-troubleshoot` runs `DiagnosticsService.RunChecks` once a client exists and again whenever the connection or the
