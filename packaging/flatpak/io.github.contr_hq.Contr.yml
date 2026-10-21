@@ -21,10 +21,15 @@ build-options:
   env:
     CARGO_HOME: /run/build/contr/cargo
 modules:
-  # The GNOME runtime carries no VTE for GTK 4, which the container terminal needs.
+  # The GNOME runtime carries no VTE for GTK 4, which the container terminal needs. Meson fetches the simdutf, fmt
+  # and fast_float subprojects VTE's wraps pin.
   - name: vte
     buildsystem: meson
+    build-options:
+      build-args:
+        - --share=network
     config-opts:
+      - --wrap-mode=default
       - -Dgtk3=false
       - -Dgtk4=true
       - -Dgir=false
