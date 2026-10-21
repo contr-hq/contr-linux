@@ -95,8 +95,8 @@ a spinner while it starts or stops, and a notification says when a start finishe
 engine state changes. Its alert leads with an unreachable daemon, then a failed engine and its `ErrorReason`, then the
 first failing check, and offers the remediations of the failing checks through `RunRemediation`. A remediation whose
 outcome needs a new login offers to log out through `org.gnome.SessionManager`. Logs come from `journalctl -o json`:
-the daemon's user unit, falling back to the log file in the runtime directory, or the engine's unit. No RPC collects
-a diagnostics bundle, so that row stays disabled.
+the daemon's user unit, falling back to the log file in the runtime directory, or the engine's unit. Create diagnostics
+bundle streams `CreateBundle` into the file a save dialog names, through a `.part` file renamed once the stream ends.
 
 ## Onboarding
 
