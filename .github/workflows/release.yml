@@ -1,0 +1,158 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - packaging/**
+      - xtask/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  binary:
+    # Each package's binary links against its own distribution's GTK, libadwaita and VTE, which
+    # packaging/linux/nfpm.yaml depends on.
+    name: binary (${{ matrix.packager }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - packager: deb
+            image: ubuntu:26.04
+            packages: >-
+              apt-get update && apt-get install -y --no-install-recommends
+              build-essential ca-certificates curl git zstd pkg-config libglib2.0-dev-bin
+              libgtk-4-dev libadwaita-1-dev libvte-2.91-gtk4-dev
+          - packager: rpm
+            image: fedora:44
+            packages: >-
+              dnf install -y --setopt=install_weak_deps=False
+              gcc git tar zstd pkgconf-pkg-config glib2-devel gtk4-devel libadwaita-devel vte291-gtk4-devel
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    steps:
+      - run: ${{ matrix.packages }}
+      - uses: actions/checkout@v7
+      - name: Install rustup
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.packager }}
+      - run: cargo build --release --locked --package contr-desktop
+      - uses: actions/upload-artifact@v7
+        with:
+          name: binary-${{ matrix.packager }}
+          path: target/release/contr-desktop
+          if-no-files-found: error
+
+  packages:
+    needs: binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v8
+        with:
+          name: binary-deb
+          path: target/binaries/deb
+      - uses: actions/download-artifact@v8
+        with:
+          name: binary-rpm
+          path: target/binaries/rpm
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.2
+      - run: >-
+          mkdir -p target/notices && cargo about generate --config packaging/licenses/about.toml
+          --output-file target/notices/rust-crates.txt packaging/licenses/about.hbs
+      - name: Debian and RPM packages
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "xtask") | .version')
+          [[ "$GITHUB_REF" == refs/tags/v* ]] && version=${GITHUB_REF_NAME#v}
+          cargo xtask package-linux --version "$version" \
+            --deb-binary target/binaries/deb/contr-desktop --rpm-binary target/binaries/rpm/contr-desktop
+      - name: Checksums
+        run: |
+          cd target/dist
+          # GitHub renames release assets whose names hold characters such as ~, which SHA256SUMS would then not match.
+          for package in contr_*.deb contr-*.rpm; do
+            if [[ "$package" == *'~'* ]]; then mv "$package" "${package//'~'/-}"; fi
+          done
+          sha256sum contr_*.deb contr-*.rpm > SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packages
+          path: |
+            target/dist/contr_*.deb
+            target/dist/contr-*.rpm
+            target/dist/SHA256SUMS
+          if-no-files-found: error
+  install:
+    # Installs each package on its distribution, without contr-daemon, and checks that every library the binary
+    # links resolves and that the desktop entry and metainfo validate.
+    name: install (${{ matrix.packager }})
+    needs: packages
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - packager: deb
+            image: ubuntu:26.04
+            install: >-
+              apt-get update && apt-get install -y --no-install-recommends desktop-file-utils appstream
+              libgtk-4-1 libadwaita-1-0 libvte-2.91-gtk4-0 && dpkg --force-depends -i packages/contr_*.deb
+          - packager: rpm
+            image: fedora:44
+            install: >-
+              dnf install -y --setopt=install_weak_deps=False desktop-file-utils appstream
+              gtk4 libadwaita vte291-gtk4 && rpm -i --nodeps packages/contr-*.rpm
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: packages
+          path: packages
+      - run: ${{ matrix.install }}
+      - name: Every linked library resolves
+        run: |
+          ldd /usr/bin/contr-desktop
+          ! ldd /usr/bin/contr-desktop | grep 'not found'
+      - run: desktop-file-validate /usr/share/applications/io.github.contr_hq.Contr.desktop
+      - run: appstreamcli validate --no-net /usr/share/metainfo/io.github.contr_hq.Contr.metainfo.xml
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: install
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: packages
+          path: packages
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="docs/releases/$GITHUB_REF_NAME.md"
+          test -f "$notes" || { echo "::error::$notes holds no release notes"; exit 1; }
+          prerelease=$([[ "$GITHUB_REF_NAME" == *-* ]] && echo --prerelease || true)
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "Contr for Linux ${GITHUB_REF_NAME#v}" \
+            --notes-file "$notes" $prerelease packages/contr_*.deb packages/contr-*.rpm packages/SHA256SUMS
