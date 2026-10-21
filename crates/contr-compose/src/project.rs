@@ -64,6 +64,8 @@ pub(crate) enum ProjectMsg {
 pub(crate) enum ProjectOutput {
     OpenContainer(String),
     Toast(String),
+    /// An action succeeded; carries what to tell the user.
+    Finished(String),
     Forgotten,
 }
 
@@ -344,7 +346,7 @@ impl Component for ProjectPage {
                 let action = self.action.take();
                 match result {
                     Ok(0) => {
-                        let _ = sender.output(ProjectOutput::Toast(done_text(action, &self.project.name)));
+                        let _ = sender.output(ProjectOutput::Finished(done_text(action, &self.project.name)));
                     }
                     Ok(code) => show_failure(root, action, code, &self.output),
                     Err(message) => {
