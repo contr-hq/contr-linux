@@ -68,6 +68,27 @@ pub(crate) fn split_reference(reference: &str) -> (String, String) {
     }
 }
 
+/// A push or pull failed because the registry wants credentials `docker login` stores.
+pub(crate) fn needs_login(message: &str) -> bool {
+    let message = message.to_lowercase();
+    [
+        "no basic auth credentials",
+        "unauthorized",
+        "authentication required",
+        "denied",
+    ]
+    .iter()
+    .any(|sign| message.contains(sign))
+}
+
+/// `docker login registry.corp` for the registry `reference` names, or `docker login` for Docker Hub.
+pub(crate) fn login_command(reference: &str) -> String {
+    match reference.split_once('/') {
+        Some((host, _)) if host.contains(['.', ':']) || host == "localhost" => format!("docker login {host}"),
+        _ => "docker login".to_owned(),
+    }
+}
+
 fn tags(image: &Image) -> Vec<&str> {
     image
         .repo_tags
@@ -108,31 +129,38 @@ pub(crate) fn sections(
             sections.unused_size += image.size_bytes;
             continue;
         }
-        let reference = tags
-            .first()
-            .map_or_else(|| format::short_id(&image.id).to_owned(), |tag| (*tag).to_owned());
-        if !query.is_empty() && !tags.iter().any(|tag| tag.to_lowercase().contains(&query)) {
-            continue;
+        if users.is_empty() {
+            sections.unused_size += image.size_bytes;
         }
-        let (repository, tag) = if tags.is_empty() {
-            (reference.clone(), String::new())
+        // One row per tag, as `docker images` lists them; an untagged image a container uses shows its short ID.
+        let references: Vec<String> = if tags.is_empty() {
+            vec![format::short_id(&image.id).to_owned()]
         } else {
-            split_reference(&reference)
+            tags.iter().map(|tag| (*tag).to_owned()).collect()
         };
-        let view = ImageView {
-            id: image.id.clone(),
-            reference,
-            repository,
-            tag,
-            size: image.size_bytes,
-            created: created(image),
-            users,
-        };
-        if view.users.is_empty() {
-            sections.unused_size += view.size;
-            sections.unused.push(view);
-        } else {
-            sections.used.push(view);
+        for reference in references {
+            if !query.is_empty() && !reference.to_lowercase().contains(&query) {
+                continue;
+            }
+            let (repository, tag) = if tags.is_empty() {
+                (reference.clone(), String::new())
+            } else {
+                split_reference(&reference)
+            };
+            let view = ImageView {
+                id: image.id.clone(),
+                reference,
+                repository,
+                tag,
+                size: image.size_bytes,
+                created: created(image),
+                users: users.clone(),
+            };
+            if view.users.is_empty() {
+                sections.unused.push(view);
+            } else {
+                sections.used.push(view);
+            }
         }
     }
     for list in [&mut sections.used, &mut sections.unused] {
@@ -279,6 +307,18 @@ mod tests {
     }
 
     #[test]
+    fn each_tag_is_its_own_row() {
+        let images: BTreeMap<String, Image> = [image("sha256:a", &["hello-world:latest", "registry.corp/hello:1"], 26)]
+            .into_iter()
+            .map(|image| (image.id.clone(), image))
+            .collect();
+        let sections = sections(&images, &BTreeMap::new(), |_| None, "", Sort::Name);
+        let references: Vec<&str> = sections.unused.iter().map(|view| view.reference.as_str()).collect();
+        assert_eq!(references, ["hello-world:latest", "registry.corp/hello:1"]);
+        assert_eq!(sections.unused_size, 26);
+    }
+
+    #[test]
     fn layers_read_like_the_design() {
         let layer = |status: &str, current, total| LayerProgress {
             layer_id: "6e771e15690e".to_owned(),
@@ -301,5 +341,17 @@ mod tests {
         let (fraction, text) = pull_summary(&layers, Duration::from_secs(10));
         assert!((fraction - 87.0 / 141.0).abs() < 1e-9);
         assert_eq!(text, "87 of 141 MB · about 6 seconds left");
+    }
+
+    #[test]
+    fn registry_errors_point_at_docker_login() {
+        assert!(needs_login("push access denied: no basic auth credentials"));
+        assert!(!needs_login("manifest unknown"));
+        assert_eq!(
+            login_command("registry.corp/team/app:1.2"),
+            "docker login registry.corp"
+        );
+        assert_eq!(login_command("localhost/app"), "docker login localhost");
+        assert_eq!(login_command("minh/app:1.0"), "docker login");
     }
 }

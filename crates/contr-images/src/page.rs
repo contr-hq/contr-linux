@@ -5,8 +5,8 @@ use contr_containers_api::{ContainerTab, OpenContainer, RunImage};
 use contr_daemon_ui::{Daemon, EngineGate, Status, describe, system_time, while_running};
 use contr_sdk::api::containers::v1::{Container, WatchContainersRequest, watch_containers_response};
 use contr_sdk::api::images::v1::{
-    Image, LayerProgress, PruneImagesRequest, PullImageRequest, RemoveImageRequest, WatchImagesRequest,
-    pull_image_response, watch_images_response,
+    Image, LayerProgress, PruneImagesRequest, PullImageRequest, PushImageRequest, RemoveImageRequest, TagImageRequest,
+    WatchImagesRequest, pull_image_response, push_image_response, watch_images_response,
 };
 use contr_sdk::{Client, Error};
 use contr_ui_common::format;
@@ -27,7 +27,17 @@ pub struct ImagesPage {
     sort: Sort,
     show_all: bool,
     pulls: Vec<Pull>,
+    pushes: Vec<Push>,
+    /// The ID of the next pull or push.
     next_pull: u64,
+}
+
+/// A push in progress; the engine reports no per-layer progress for it, only status lines.
+struct Push {
+    id: u64,
+    reference: String,
+    status: String,
+    task: tokio::task::JoinHandle<()>,
 }
 
 struct Pull {
@@ -50,6 +60,10 @@ pub enum ImagesMsg {
     Remove(String),
     ConfirmRemove { reference: String, force: bool },
     Copy(String),
+    AskTag(String),
+    Tag { source: String, target: String },
+    Push(String),
+    CancelPush(u64),
     Prune,
     ConfirmPrune,
     ShowAll,
@@ -71,6 +85,9 @@ pub enum ImagesCmd {
     Containers(ContainerEvent),
     PullLayer(u64, LayerProgress),
     PullDone(u64, Result<String, String>),
+    Tagged(String),
+    PushStatus(u64, String),
+    PushDone(u64, Result<String, String>),
     Done(Result<String, String>),
 }
 
@@ -98,6 +115,7 @@ pub struct ImagesWidgets {
     sort_button: gtk::MenuButton,
     content: gtk::Stack,
     pulling: gtk::Box,
+    transfers_title: gtk::Label,
     pull_cards: gtk::Box,
     used: gtk::Box,
     used_list: gtk::ListBox,
@@ -240,6 +258,7 @@ impl Component for ImagesPage {
             sort: Sort::default(),
             show_all: false,
             pulls: Vec::new(),
+            pushes: Vec::new(),
             next_pull: 0,
         };
         let widgets = ImagesWidgets {
@@ -250,6 +269,7 @@ impl Component for ImagesPage {
             sort_button,
             content,
             pulling,
+            transfers_title: pulling_header.title.clone(),
             pull_cards,
             used,
             used_list,
@@ -313,6 +333,32 @@ impl Component for ImagesPage {
             ImagesMsg::Copy(reference) => {
                 root.clipboard().set_text(&reference);
                 root.add_toast(adw::Toast::new("Copied image reference"));
+            }
+            ImagesMsg::AskTag(reference) => ask_tag(root, &reference, sender.input_sender()),
+            ImagesMsg::Tag { source, target } => {
+                let Some(client) = self.status.running_client().cloned() else {
+                    return;
+                };
+                let target = target.trim().to_owned();
+                sender.oneshot_command(async move {
+                    let request = TagImageRequest {
+                        source,
+                        target: target.clone(),
+                    };
+                    let result = client.images().tag_image(request).await;
+                    match result {
+                        Ok(_) => ImagesCmd::Tagged(target),
+                        Err(status) => ImagesCmd::Done(Err(describe(&Error::from(status)))),
+                    }
+                });
+            }
+            ImagesMsg::Push(reference) => self.push(&sender, reference),
+            ImagesMsg::CancelPush(id) => {
+                if let Some(index) = self.pushes.iter().position(|push| push.id == id) {
+                    let push = self.pushes.remove(index);
+                    push.task.abort();
+                    root.add_toast(adw::Toast::new(&format!("Stopped pushing {}", push.reference)));
+                }
             }
             ImagesMsg::Prune => confirm_prune(root, sender.input_sender()),
             ImagesMsg::ConfirmPrune => self.call(&sender, |client| async move {
@@ -403,6 +449,50 @@ impl Component for ImagesPage {
                         let input = sender.input_sender().clone();
                         toast.connect_button_clicked(move |_| input.emit(ImagesMsg::Run(reference.clone())));
                         root.add_toast(toast);
+                    }
+                    (Err(message), _) => root.add_toast(adw::Toast::new(&message)),
+                    (Ok(_), None) => {}
+                }
+            }
+            ImagesCmd::Tagged(target) => {
+                let toast = adw::Toast::builder()
+                    .title(format!("Tagged {target}"))
+                    .button_label("Push")
+                    .build();
+                let input = sender.input_sender().clone();
+                toast.connect_button_clicked(move |_| input.emit(ImagesMsg::Push(target.clone())));
+                root.add_toast(toast);
+            }
+            ImagesCmd::PushStatus(id, status) => {
+                if let Some(push) = self.pushes.iter_mut().find(|push| push.id == id) {
+                    push.status = status;
+                }
+            }
+            ImagesCmd::PushDone(id, result) => {
+                let reference = self
+                    .pushes
+                    .iter()
+                    .position(|push| push.id == id)
+                    .map(|index| self.pushes.remove(index).reference);
+                match (result, reference) {
+                    (Ok(digest), Some(reference)) => {
+                        let title = if digest.is_empty() {
+                            format!("Pushed {reference}")
+                        } else {
+                            format!("Pushed {reference} ({})", format::short_id(&digest))
+                        };
+                        root.add_toast(adw::Toast::new(&title));
+                    }
+                    (Err(message), Some(reference)) if model::needs_login(&message) => {
+                        root.add_toast(
+                            adw::Toast::builder()
+                                .title(format!(
+                                    "The registry refused the push. Run {} and try again.",
+                                    model::login_command(&reference)
+                                ))
+                                .timeout(10)
+                                .build(),
+                        );
                     }
                     (Err(message), _) => root.add_toast(adw::Toast::new(&message)),
                     (Ok(_), None) => {}
@@ -500,7 +590,19 @@ impl ImagesPage {
         for pull in &self.pulls {
             widgets.pull_cards.append(&pull_card(pull, sender.input_sender()));
         }
-        widgets.pulling.set_visible(!self.pulls.is_empty());
+        for push in &self.pushes {
+            widgets.pull_cards.append(&push_card(push, sender.input_sender()));
+        }
+        widgets
+            .transfers_title
+            .set_label(match (self.pulls.is_empty(), self.pushes.is_empty()) {
+                (false, false) => "Pulling and pushing",
+                (true, false) => "Pushing",
+                _ => "Pulling",
+            });
+        widgets
+            .pulling
+            .set_visible(!self.pulls.is_empty() || !self.pushes.is_empty());
     }
 
     fn pull(&mut self, sender: &ComponentSender<Self>, reference: String) {
@@ -538,6 +640,42 @@ impl ImagesPage {
             reference,
             layers: Vec::new(),
             started: Instant::now(),
+            task,
+        });
+    }
+
+    fn push(&mut self, sender: &ComponentSender<Self>, reference: String) {
+        let Some(client) = self.status.running_client().cloned() else {
+            return;
+        };
+        if self.pushes.iter().any(|push| push.reference == reference) {
+            return;
+        }
+        let id = self.next_pull;
+        self.next_pull += 1;
+        let out = sender.command_sender().clone();
+        let request = PushImageRequest {
+            reference: reference.clone(),
+        };
+        let task = relm4::spawn(async move {
+            let result = async {
+                let mut stream = client.images().push_image(request).await?.into_inner();
+                while let Some(response) = stream.message().await? {
+                    match response.event {
+                        Some(push_image_response::Event::Status(status)) => out.emit(ImagesCmd::PushStatus(id, status)),
+                        Some(push_image_response::Event::Pushed(pushed)) => return Ok(pushed.digest),
+                        None => {}
+                    }
+                }
+                Err(Error::Protocol("the push ended without an image"))
+            }
+            .await;
+            out.emit(ImagesCmd::PushDone(id, result.map_err(|error| describe(&error))));
+        });
+        self.pushes.push(Push {
+            id,
+            reference,
+            status: "Starting…".to_owned(),
             task,
         });
     }
@@ -623,7 +761,12 @@ fn image_row(view: &ImageView, now: SystemTime, input: &relm4::Sender<ImagesMsg>
         ("Run…", "images.run"),
         ("Copy Reference", "images.copy"),
         ("Pull Again", "images.pull"),
-    ] {
+        ("Tag…", "images.tag"),
+        ("Push", "images.push"),
+    ]
+    .into_iter()
+    .filter(|(_, action)| *action != "images.push" || !view.tag.is_empty())
+    {
         let item = gio::MenuItem::new(Some(label), None);
         item.set_action_and_target_value(Some(action), Some(&view.reference.to_variant()));
         menu.append_item(&item);
@@ -782,6 +925,8 @@ fn install_actions(root: &adw::ToastOverlay, sender: &ComponentSender<ImagesPage
         ("run", ImagesMsg::Run as fn(String) -> ImagesMsg),
         ("copy", ImagesMsg::Copy),
         ("pull", ImagesMsg::Pull),
+        ("tag", ImagesMsg::AskTag),
+        ("push", ImagesMsg::Push),
         ("remove", ImagesMsg::Remove),
     ] {
         let action = gio::SimpleAction::new(name, Some(glib::VariantTy::STRING));
@@ -806,6 +951,66 @@ fn install_actions(root: &adw::ToastOverlay, sender: &ComponentSender<ImagesPage
     });
     actions.add_action(&sort);
     root.insert_action_group("images", Some(&actions));
+}
+
+fn push_card(push: &Push, input: &relm4::Sender<ImagesMsg>) -> gtk::Box {
+    let reference = gtk::Label::builder().label(&push.reference).xalign(0.0).build();
+    let status = gtk::Label::builder()
+        .label(&push.status)
+        .xalign(0.0)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .css_classes(["dim-label", "group-description"])
+        .build();
+    let text = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .hexpand(true)
+        .build();
+    text.append(&reference);
+    text.append(&status);
+    let cancel = icon_button("window-close-symbolic", &format!("Stop pushing {}", push.reference));
+    let id = push.id;
+    let input = input.clone();
+    cancel.connect_clicked(move |_| input.emit(ImagesMsg::CancelPush(id)));
+    let top = gtk::Box::builder().spacing(12).build();
+    top.append(&adw::Spinner::new());
+    top.append(&text);
+    top.append(&cancel);
+    let card = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .css_classes(["card", "pull-head"])
+        .build();
+    card.append(&top);
+    card
+}
+
+fn ask_tag(parent: &adw::ToastOverlay, reference: &str, input: &relm4::Sender<ImagesMsg>) {
+    let dialog = adw::AlertDialog::new(
+        Some(&format!("Tag {reference}")),
+        Some("Name the image for the registry you push it to. A name without a tag gets latest."),
+    );
+    let entry = gtk::Entry::builder()
+        .placeholder_text("registry.example.com/team/app:1.0")
+        .activates_default(true)
+        .build();
+    dialog.set_extra_child(Some(&entry));
+    dialog.add_responses(&[("cancel", "Cancel"), ("tag", "Tag")]);
+    dialog.set_response_appearance("tag", adw::ResponseAppearance::Suggested);
+    dialog.set_default_response(Some("tag"));
+    dialog.set_close_response("cancel");
+    let input = input.clone();
+    let source = reference.to_owned();
+    let focus = entry.clone();
+    dialog.connect_response(Some("tag"), move |_, _| {
+        let target = entry.text().trim().to_owned();
+        if !target.is_empty() {
+            input.emit(ImagesMsg::Tag {
+                source: source.clone(),
+                target,
+            });
+        }
+    });
+    dialog.present(Some(parent));
+    dialog.set_focus(Some(&focus));
 }
 
 fn ask_pull(parent: &adw::ToastOverlay, input: &relm4::Sender<ImagesMsg>) {
