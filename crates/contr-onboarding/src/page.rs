@@ -1,5 +1,5 @@
 use contr_core::product;
-use contr_daemon_ui::{Daemon, Status, describe, remediation_label, run_remediation};
+use contr_daemon_ui::{Daemon, Status, describe, failure, remediation_label, run_remediation};
 use contr_sdk::Error;
 use contr_sdk::api::common::v1::{Progress, Remediation};
 use contr_sdk::api::diagnostics::v1::{Check, RemediationOutcome, RunChecksRequest};
@@ -44,7 +44,8 @@ pub enum OnboardingCmd {
     Status(Box<Status>),
     Checks(Result<Vec<Check>, String>),
     Progress(Progress),
-    Fixed(Result<RemediationOutcome, String>),
+    /// `Err(None)`: the user dismissed the fix's prompt.
+    Fixed(Result<RemediationOutcome, Option<String>>),
 }
 
 pub struct OnboardingWidgets {
@@ -251,7 +252,8 @@ impl Component for OnboardingPage {
                             self.run_checks(&sender);
                         }
                     }
-                    Err(message) => root.add_toast(adw::Toast::new(&message)),
+                    Err(Some(message)) => root.add_toast(adw::Toast::new(&message)),
+                    Err(None) => {}
                 }
             }
         }
@@ -286,7 +288,7 @@ impl OnboardingPage {
                 out.emit(OnboardingCmd::Progress(progress));
             })
             .await
-            .map_err(|error| describe(&error));
+            .map_err(|error| failure(&error));
             out.emit(OnboardingCmd::Fixed(result));
         });
     }

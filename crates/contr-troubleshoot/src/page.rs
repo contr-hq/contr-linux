@@ -1,7 +1,9 @@
 use std::time::SystemTime;
 
 use contr_core::{paths, product};
-use contr_daemon_ui::{Daemon, EngineAction, Status, describe, engine_kind, remediation_label, run_remediation};
+use contr_daemon_ui::{
+    Daemon, EngineAction, Status, describe, engine_kind, failure, remediation_label, run_remediation,
+};
 use contr_sdk::api::common::v1::Remediation;
 use contr_sdk::api::containers::v1::{ContainerState, ListContainersRequest, PruneContainersRequest};
 use contr_sdk::api::daemon::v1::Capability;
@@ -64,7 +66,8 @@ pub enum TroubleshootCmd {
     Status(Box<Status>),
     Checks(Result<Vec<Check>, String>),
     FixProgress(String),
-    Fixed(Result<(bool, bool), String>),
+    /// `Err(None)`: the user dismissed the fix's prompt.
+    Fixed(Result<(bool, bool), Option<String>>),
     Logs(String),
     CleanUpPlan(Result<(usize, usize, u64), String>),
     Done(Result<String, String>),
@@ -389,7 +392,8 @@ impl Component for TroubleshootPage {
                         }));
                         self.run_checks(&sender);
                     }
-                    Err(message) => root.add_toast(adw::Toast::new(&message)),
+                    Err(Some(message)) => root.add_toast(adw::Toast::new(&message)),
+                    Err(None) => {}
                 }
             }
             TroubleshootCmd::Logs(text) => {
@@ -452,7 +456,7 @@ impl TroubleshootPage {
             })
             .await
             .map(|outcome| (outcome.logout_required, outcome.restart_required))
-            .map_err(|error| describe(&error));
+            .map_err(|error| failure(&error));
             out.emit(TroubleshootCmd::Fixed(result));
         });
     }
