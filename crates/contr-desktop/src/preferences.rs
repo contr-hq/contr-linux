@@ -15,8 +15,8 @@ use contr_ui_common::format;
 use relm4::adw::{self, prelude::*};
 use relm4::gtk::{self, glib};
 
-use crate::autostart;
 use crate::client_settings::ClientSettings;
+use crate::{autostart, sandbox};
 
 const PROXY_MODES: [(&str, ProxyMode); 3] = [
     ("System", ProxyMode::System),
@@ -98,6 +98,8 @@ fn general(state: &Rc<Dialog>, context: &PreferencesContext, status: &Status) ->
                 .add_toast(adw::Toast::new(&format!("Couldn’t change the login item: {error}")));
         }
     });
+    // Flatpak keeps the sandbox's autostart directory private, so the entry would never start the client.
+    login.set_visible(!sandbox::flatpak());
     startup.add(&login);
     let keep = adw::SwitchRow::builder()
         .title("Keep running when the window is closed")

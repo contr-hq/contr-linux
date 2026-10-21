@@ -16,7 +16,7 @@ Networks, Compose, Kubernetes, Troubleshoot, Preferences and first-run onboardin
 - Modules mirror the Windows client; a module reaches another only through its `-api` crate, checked by
   `cargo xtask archlint`. See [docs/architecture.md](docs/architecture.md).
 - Packages: `contr` as a .deb (Ubuntu 26.04) and .rpm (Fedora 44), depending on the daemon's `contr-daemon`
-  package; see [docs/development.md](docs/development.md#packages). A Flatpak follows.
+  package; see [docs/development.md](docs/development.md#packages). A beta Flatpak talks to the same host daemon.
 
 ## Building
 

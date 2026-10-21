@@ -6,6 +6,7 @@ mod client_settings;
 mod engine_card;
 mod notifications;
 mod preferences;
+mod sandbox;
 mod sections;
 mod shortcuts;
 mod tray;

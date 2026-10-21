@@ -1,0 +1,61 @@
+# Beta Flatpak of the desktop client. It talks to the contrd the contr-daemon package installs on the host, through
+# the socket that package's contrd.socket listens on; nothing of the daemon runs in the sandbox.
+id: io.github.contr_hq.Contr
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: contr-desktop
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # $XDG_RUNTIME_DIR/contr holds contrd.sock; systemd starts contrd on the first connection.
+  - --filesystem=xdg-run/contr
+  # The tray icon.
+  - --talk-name=org.kde.StatusNotifierWatcher
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/contr/cargo
+modules:
+  # The GNOME runtime carries no VTE for GTK 4, which the container terminal needs. Meson fetches the simdutf, fmt
+  # and fast_float subprojects VTE's wraps pin.
+  - name: vte
+    buildsystem: meson
+    build-options:
+      build-args:
+        - --share=network
+    config-opts:
+      - --wrap-mode=default
+      - -Dgtk3=false
+      - -Dgtk4=true
+      - -Dgir=false
+      - -Dvapi=false
+      - -Ddocs=false
+      - -Dglade=false
+      - -Dapp=false
+      - -D_systemd=false
+    sources:
+      - type: archive
+        url: https://download.gnome.org/sources/vte/0.84/vte-0.84.1.tar.xz
+        sha256: aca1caa8478aebcdbb1d67897fb3511eb7601debae6810e16a15b6fa25f31ac8
+  - name: contr
+    buildsystem: simple
+    build-options:
+      # A beta build fetches crates and the contr-sdk git dependency while building.
+      build-args:
+        - --share=network
+    build-commands:
+      - cargo build --release --locked --package contr-desktop
+      - install -Dm755 target/release/contr-desktop /app/bin/contr-desktop
+      - install -Dm644 packaging/linux/io.github.contr_hq.Contr.desktop /app/share/applications/io.github.contr_hq.Contr.desktop
+      - install -Dm644 packaging/linux/io.github.contr_hq.Contr.metainfo.xml /app/share/metainfo/io.github.contr_hq.Contr.metainfo.xml
+      - install -Dm644 crates/contr-ui-common/data/icons/scalable/apps/app.svg /app/share/icons/hicolor/scalable/apps/io.github.contr_hq.Contr.svg
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - target
