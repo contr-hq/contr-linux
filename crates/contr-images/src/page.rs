@@ -59,6 +59,8 @@ pub enum ImagesMsg {
 pub enum ImagesOutput {
     OpenContainer(OpenContainer),
     Run(RunImage),
+    /// A pull finished; carries the reference.
+    Pulled(String),
 }
 
 #[doc(hidden)]
@@ -393,6 +395,7 @@ impl Component for ImagesPage {
                     .map(|index| self.pulls.remove(index).reference);
                 match (result, reference) {
                     (Ok(_), Some(reference)) => {
+                        let _ = sender.output(ImagesOutput::Pulled(reference.clone()));
                         let toast = adw::Toast::builder()
                             .title(format!("Pulled {reference}"))
                             .button_label("Run")
