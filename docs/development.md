@@ -1,0 +1,49 @@
+# Development
+
+## Building
+
+The workspace builds with the toolchain in `rust-toolchain.toml`. It needs the GTK 4, libadwaita and VTE (GTK 4)
+development packages; see the README. Without root, the VTE package can be unpacked into a private prefix:
+
+```sh
+apt-get download libvte-2.91-gtk4-dev
+dpkg-deb -x libvte-2.91-gtk4-dev_*.deb ~/.cache/contr-dev/vte-dev
+```
+
+then point `PKG_CONFIG_PATH` at its `pkgconfig` directory, after fixing `libdir` in the `.pc` file and the
+`libvte-2.91-gtk4.so` link to the system library.
+
+## Running against a daemon
+
+Build `contrd` from a checkout of contr-hq/contr and run it on its own socket:
+
+```sh
+contrd --backend fake --listen unix://$XDG_RUNTIME_DIR/contr-linux-fake.sock --no-docker-context
+CONTR_HOST=unix://$XDG_RUNTIME_DIR/contr-linux-fake.sock cargo run -p contr-desktop
+```
+
+The fake backend serves fixture containers, images and a Compose project. For a real engine, run
+`contrd --backend host` with `DOCKER_CONFIG` pointing at a configuration whose `cli-plugins` come from Docker Engine.
+With `CONTR_HOST` set, the client never starts a daemon itself.
+
+## Screenshots
+
+GTK's Broadway backend draws the window in a browser, which makes screenshots reproducible:
+
+```sh
+gtk4-broadwayd --port 8085 :5 &
+GDK_BACKEND=broadway BROADWAY_DISPLAY=:5 ADW_DEBUG_COLOR_SCHEME=prefer-light ADW_DEBUG_ACCENT_COLOR=blue \
+  CONTR_HOST=unix://$XDG_RUNTIME_DIR/contr-linux-fake.sock cargo run -p contr-desktop
+```
+
+and open `http://127.0.0.1:8085`. Distribution defaults such as Ubuntu's Yaru theme still apply; a keyfile GSettings
+backend (`GSETTINGS_BACKEND=keyfile` with `gtk-theme='Adwaita'`) gives the stock look the design uses.
+
+## Checks before every push
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
+cargo xtask archlint
+```
