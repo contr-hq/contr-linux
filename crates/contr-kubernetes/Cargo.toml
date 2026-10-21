@@ -1,0 +1,22 @@
+[package]
+name = "contr-kubernetes"
+description = "The Kubernetes section of the Contr Linux client: the k3s cluster, its start-up and maintenance."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+contr-daemon-ui.workspace = true
+contr-sdk.workspace = true
+contr-ui-common.workspace = true
+relm4.workspace = true
+tokio = { workspace = true, features = ["macros"] }
+
+[dev-dependencies]
+prost-types.workspace = true
+
+[lints]
+workspace = true
