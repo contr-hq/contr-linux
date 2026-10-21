@@ -6,7 +6,8 @@ GTK4 and libadwaita desktop client for [Contr](https://github.com/contr-hq/contr
 ## Status
 
 The application shell (window, sidebar navigation, engine card and gate, primary menu, tray icon) and the Containers
-section with each container's logs, inspection, terminal and stats. Other pages arrive module by module.
+section with each container's logs, inspection, terminal and stats, the Run dialog, and Images with pulls. Other
+pages arrive module by module.
 
 ## Stack
 

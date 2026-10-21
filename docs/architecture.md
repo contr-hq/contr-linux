@@ -55,6 +55,16 @@ hidden until asked for. Terminal runs a shell through `Exec` with a pseudo-termi
 shell's stdin on disconnect, since the engine keeps an exec running after its client leaves. Stats plots the
 `StreamStats` samples received since the view opened; the daemon keeps no history.
 
+## Images and the Run dialog
+
+`contr-images` follows `WatchImages`, and `WatchContainers` to name the containers that use each image. Images that no
+container uses, untagged ones included, can be removed together with `PruneImages`. A pull streams `PullImage` into a
+card with the overall bytes and estimate and a line per layer; cancelling drops the call, which cancels the pull.
+
+The Run dialog belongs to the containers module and is reached from other modules through `RunImage`. It inspects the
+image to offer the ports it exposes, picks host ports that no container publishes and `CheckHostPorts` reports free,
+publishes them on 127.0.0.1, and calls `CreateContainer` with `start`, pulling first when the image is not local.
+
 ## Capabilities
 
 The sidebar shows Compose and Kubernetes only when the handshake advertises `CAPABILITY_COMPOSE` and
