@@ -1,6 +1,7 @@
 //! Widgets, styles, icons and formatting the Contr Linux client's modules share.
 
 pub mod format;
+pub mod sparkline;
 pub mod widgets;
 
 use relm4::gtk::{gio, glib};

@@ -53,6 +53,13 @@
   margin-right: 2px;
 }
 
+button.link.port-link,
+button.link.port-link:hover {
+  background: none;
+  box-shadow: none;
+  min-height: 0;
+}
+
 .group-title {
   font-weight: 700;
   font-size: 15px;
@@ -163,6 +170,61 @@ banner.error > revealer > widget {
 
 .sparkline-card {
   padding: 12px;
+}
+
+.container-row {
+  min-height: 42px;
+  padding: 8px 8px 8px 14px;
+}
+
+.detail-meta {
+  font-size: 14px;
+}
+
+.detail-state {
+  font-weight: 600;
+}
+
+.console-view {
+  padding: 12px 16px;
+}
+
+.stat-card {
+  padding: 14px 16px 10px;
+}
+
+.stat-value {
+  font-size: 22px;
+  font-weight: 800;
+  font-feature-settings: "tnum";
+}
+
+.stat-rate {
+  font-size: 14px;
+  font-weight: 700;
+  font-feature-settings: "tnum";
+}
+
+.legend-received,
+.legend-sent {
+  min-width: 14px;
+  min-height: 2px;
+}
+
+.legend-received { background-color: var(--accent-bg-color); }
+.legend-sent { background-color: #9141ac; }
+
+button.destructive-text {
+  color: var(--error-color);
+  background-color: color-mix(in srgb, var(--window-fg-color) 8%, transparent);
+}
+
+button.destructive-text:hover {
+  background-color: color-mix(in srgb, var(--window-fg-color) 12%, transparent);
+}
+
+.raised-button {
+  font-weight: 600;
 }
 
 @media (prefers-color-scheme: dark) {
