@@ -21,6 +21,23 @@ build-options:
   env:
     CARGO_HOME: /run/build/contr/cargo
 modules:
+  # The GNOME runtime carries no VTE for GTK 4, which the container terminal needs.
+  - name: vte
+    buildsystem: meson
+    config-opts:
+      - -Dgtk3=false
+      - -Dgtk4=true
+      - -Dgir=false
+      - -Dvapi=false
+      - -Ddocs=false
+      - -Dglade=false
+      - -Dapp=false
+      - -D_systemd=false
+    sources:
+      - type: git
+        url: https://gitlab.gnome.org/GNOME/vte.git
+        tag: 0.84.1
+        commit: f2223e45d7f04c5383c59e76772501f0ed4215bc
   - name: contr
     buildsystem: simple
     build-options:
