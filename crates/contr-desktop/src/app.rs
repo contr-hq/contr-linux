@@ -2,10 +2,11 @@ use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
-use contr_containers::{ContainersMsg, ContainersPage};
-use contr_containers_api::{ContainerTab, OpenContainer};
+use contr_containers::{ContainersMsg, ContainersOutput, ContainersPage};
+use contr_containers_api::{ContainerTab, OpenContainer, RunImage};
 use contr_core::product;
 use contr_daemon_ui::{Daemon, EngineAction, Status, TROUBLESHOOT_ACTION, while_running};
+use contr_images::{ImagesMsg, ImagesOutput, ImagesPage};
 use contr_sdk::ClientIdentity;
 use contr_sdk::api::containers::v1::{Container, ContainerState, WatchContainersRequest, watch_containers_response};
 use contr_sdk::api::daemon::v1::Capability;
@@ -27,6 +28,7 @@ pub(crate) struct App {
     tray: Option<ksni::Handle<ContrTray>>,
     tray_state: TrayState,
     containers_page: Controller<ContainersPage>,
+    images_page: Controller<ImagesPage>,
 }
 
 #[derive(Debug)]
@@ -34,6 +36,9 @@ pub(crate) enum AppMsg {
     Select(Section),
     Present,
     OpenContainer(String),
+    Open(OpenContainer),
+    Run(RunImage),
+    PullImage,
     Engine(EngineAction),
     Quit,
 }
@@ -125,10 +130,23 @@ impl Component for App {
         let stack = gtk::Stack::builder()
             .transition_type(gtk::StackTransitionType::Crossfade)
             .build();
-        let containers_page = ContainersPage::builder().launch(daemon.clone()).detach();
+        let containers_page =
+            ContainersPage::builder()
+                .launch(daemon.clone())
+                .forward(sender.input_sender(), |output| match output {
+                    ContainersOutput::Show => AppMsg::Select(Section::Containers),
+                    ContainersOutput::PullImage => AppMsg::PullImage,
+                });
+        let images_page = ImagesPage::builder()
+            .launch(daemon.clone())
+            .forward(sender.input_sender(), |output| match output {
+                ImagesOutput::OpenContainer(open) => AppMsg::Open(open),
+                ImagesOutput::Run(run) => AppMsg::Run(run),
+            });
         for section in Section::ALL {
             match section {
                 Section::Containers => stack.add_named(containers_page.widget(), Some(section.name())),
+                Section::Images => stack.add_named(images_page.widget(), Some(section.name())),
                 _ => stack.add_named(&sections::placeholder(section, &daemon), Some(section.name())),
             };
         }
@@ -178,6 +196,7 @@ impl Component for App {
             tray: None,
             tray_state: TrayState::default(),
             containers_page,
+            images_page,
         };
         if let Some(first) = rows.get(&Section::Containers) {
             list.select_row(Some(&first.row));
@@ -200,11 +219,19 @@ impl Component for App {
             AppMsg::Present => root.present(),
             AppMsg::OpenContainer(id) => {
                 root.present();
-                self.section = Section::Containers;
-                self.containers_page.emit(ContainersMsg::Open(OpenContainer {
+                sender.input(AppMsg::Open(OpenContainer {
                     id,
                     tab: ContainerTab::Logs,
                 }));
+            }
+            AppMsg::Open(open) => {
+                self.section = Section::Containers;
+                self.containers_page.emit(ContainersMsg::Open(open));
+            }
+            AppMsg::Run(run) => self.containers_page.emit(ContainersMsg::Run(run)),
+            AppMsg::PullImage => {
+                self.section = Section::Images;
+                self.images_page.emit(ImagesMsg::AskPull);
             }
             AppMsg::Engine(action) => {
                 let daemon = self.daemon.clone();

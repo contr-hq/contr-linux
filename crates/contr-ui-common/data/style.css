@@ -227,6 +227,23 @@ button.destructive-text:hover {
   font-weight: 600;
 }
 
+
+.pull-head {
+  padding: 12px 14px;
+}
+
+.pull-layers {
+  padding: 10px 14px 12px;
+}
+
+progressbar.success > trough > progress {
+  background-color: var(--success-bg-color);
+}
+
+.italic {
+  font-style: italic;
+}
+
 @media (prefers-color-scheme: dark) {
   .console {
     box-shadow: 0 0 0 1px alpha(white, .08);
