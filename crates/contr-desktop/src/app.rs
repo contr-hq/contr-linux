@@ -29,7 +29,7 @@ use crate::engine_card::EngineCard;
 use crate::preferences::{self, PreferencesContext};
 use crate::sections::Section;
 use crate::tray::{self, ContrTray, RunningContainer, TrayState};
-use crate::{notifications, shortcuts};
+use crate::{notifications, sandbox, shortcuts};
 
 /// Name of the window's page that holds the sidebar and sections.
 const MAIN_PAGE: &str = "main";
@@ -718,7 +718,8 @@ fn start_tray(sender: &ComponentSender<App>) {
     let tray = ContrTray::new(sender.input_sender().clone(), tray::icon_pixmaps());
     sender.oneshot_command(async move {
         use ksni::TrayMethods as _;
-        match tray.spawn().await {
+        // A sandbox may not own the StatusNotifierItem-PID-ID name; the watcher then finds the tray by its unique name.
+        match tray.disable_dbus_name(sandbox::flatpak()).spawn().await {
             Ok(handle) => AppCmd::Tray(Some(TrayHandle(handle))),
             Err(error) => {
                 tracing::info!(%error, "no tray host on the session bus");
