@@ -15,16 +15,35 @@ const FILE_NAME: &str = "desktop.json";
 pub(crate) struct ClientSettings {
     /// Closing the window hides it; only Quit ends the client.
     pub(crate) keep_running: bool,
-    pub(crate) notify_container_errors: bool,
-    pub(crate) notify_finished: bool,
+    pub(crate) notify: Notify,
+    /// The user finished or skipped first-run setup.
+    pub(crate) onboarded: bool,
 }
 
 impl Default for ClientSettings {
     fn default() -> Self {
         Self {
             keep_running: true,
-            notify_container_errors: true,
-            notify_finished: false,
+            notify: Notify::default(),
+            onboarded: false,
+        }
+    }
+}
+
+/// Which events send a desktop notification while the window is not focused.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct Notify {
+    pub(crate) container_errors: bool,
+    /// Pulls and Compose runs.
+    pub(crate) finished: bool,
+}
+
+impl Default for Notify {
+    fn default() -> Self {
+        Self {
+            container_errors: true,
+            finished: false,
         }
     }
 }
@@ -58,8 +77,9 @@ mod tests {
 
     #[test]
     fn missing_fields_take_their_defaults() {
-        let settings: ClientSettings = serde_json::from_str(r#"{"notify_finished": true}"#).unwrap();
+        let settings: ClientSettings = serde_json::from_str(r#"{"notify": {"finished": true}}"#).unwrap();
         assert!(settings.keep_running);
-        assert!(settings.notify_finished);
+        assert!(settings.notify.container_errors);
+        assert!(settings.notify.finished);
     }
 }

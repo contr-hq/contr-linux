@@ -17,6 +17,7 @@ contr-core.workspace = true
 contr-daemon-ui.workspace = true
 contr-images.workspace = true
 contr-networks.workspace = true
+contr-onboarding.workspace = true
 contr-troubleshoot.workspace = true
 contr-sdk.workspace = true
 contr-ui-common.workspace = true
