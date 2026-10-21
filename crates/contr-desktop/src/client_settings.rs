@@ -1,6 +1,7 @@
 //! Settings of this client alone, kept apart from the daemon's settings file.
 
 use std::fs;
+use std::io;
 use std::path::PathBuf;
 
 use contr_core::product;
@@ -39,6 +40,15 @@ impl ClientSettings {
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default()
+    }
+
+    pub(crate) fn save(&self) -> io::Result<()> {
+        let path = Self::path();
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        let bytes = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
+        fs::write(path, bytes)
     }
 }
 

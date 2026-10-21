@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
@@ -10,9 +10,12 @@ use contr_daemon_ui::{Daemon, EngineAction, Status, TROUBLESHOOT_ACTION, engine_
 use contr_images::{ImagesMsg, ImagesOutput, ImagesPage};
 use contr_networks::{NetworksOutput, NetworksPage};
 use contr_sdk::ClientIdentity;
-use contr_sdk::api::containers::v1::{Container, ContainerState, WatchContainersRequest, watch_containers_response};
+use contr_sdk::api::containers::v1::{
+    Container, ContainerState, RestartContainerRequest, WatchContainersRequest, watch_containers_response,
+};
 use contr_sdk::api::daemon::v1::Capability;
 use contr_sdk::api::engine::v1::EngineState;
+use contr_troubleshoot::{TroubleshootOutput, TroubleshootPage};
 use contr_volumes::{VolumesOutput, VolumesPage};
 use relm4::adw::{self, prelude::*};
 use relm4::gtk::{self, gio, glib};
@@ -20,8 +23,10 @@ use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Con
 
 use crate::client_settings::ClientSettings;
 use crate::engine_card::EngineCard;
+use crate::preferences::{self, PreferencesContext};
 use crate::sections::{self, Section};
 use crate::tray::{self, ContrTray, RunningContainer, TrayState};
+use crate::{notifications, shortcuts};
 
 pub(crate) struct App {
     daemon: Daemon,
@@ -30,6 +35,11 @@ pub(crate) struct App {
     section: Section,
     tray: Option<ksni::Handle<ContrTray>>,
     tray_state: TrayState,
+    tray_available: bool,
+    settings: Rc<RefCell<ClientSettings>>,
+    /// Started from the login item: the first activation leaves the window hidden.
+    background: bool,
+    problems: usize,
     containers_page: Controller<ContainersPage>,
     images_page: Controller<ImagesPage>,
     /// Held only to keep the page running; dropping a controller shuts its component down.
@@ -38,6 +48,8 @@ pub(crate) struct App {
     _networks_page: Controller<NetworksPage>,
     /// Held only to keep the page running.
     _compose_page: Controller<ComposePage>,
+    /// Held only to keep the page running.
+    _troubleshoot_page: Controller<TroubleshootPage>,
 }
 
 #[derive(Debug)]
@@ -49,6 +61,11 @@ pub(crate) enum AppMsg {
     Run(RunImage),
     PullImage,
     Engine(EngineAction),
+    RestartContainer(String),
+    Problems(usize),
+    Finished(String),
+    Preferences,
+    Shortcuts,
     Quit,
 }
 
@@ -57,7 +74,7 @@ pub(crate) enum AppCmd {
     Status(Box<Status>),
     Containers(ContainerEvent),
     Tray(Option<TrayHandle>),
-    EngineFailed(String),
+    Failed(String),
 }
 
 pub(crate) struct TrayHandle(ksni::Handle<ContrTray>);
@@ -94,7 +111,8 @@ impl Component for App {
     type CommandOutput = AppCmd;
     type Input = AppMsg;
     type Output = ();
-    type Init = ();
+    /// Whether the client started from the login item.
+    type Init = bool;
     type Root = adw::ApplicationWindow;
     type Widgets = AppWidgets;
 
@@ -108,12 +126,12 @@ impl Component for App {
             .build()
     }
 
-    fn init((): (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
+    fn init(background: bool, root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
         let daemon = Daemon::connect(ClientIdentity {
             name: format!("{}-desktop", product::SLUG),
             version: env!("CARGO_PKG_VERSION").to_owned(),
         });
-        let settings = ClientSettings::load();
+        let settings = Rc::new(RefCell::new(ClientSettings::load()));
 
         let (list, rows) = sidebar(&sender);
         let card = EngineCard::new();
@@ -151,6 +169,7 @@ impl Component for App {
             .forward(sender.input_sender(), |output| match output {
                 ImagesOutput::OpenContainer(open) => AppMsg::Open(open),
                 ImagesOutput::Run(run) => AppMsg::Run(run),
+                ImagesOutput::Pulled(reference) => AppMsg::Finished(format!("Pulled {reference}")),
             });
         let volumes_page = VolumesPage::builder()
             .launch(daemon.clone())
@@ -166,15 +185,23 @@ impl Component for App {
             .launch(daemon.clone())
             .forward(sender.input_sender(), |output| match output {
                 ComposeOutput::OpenContainer(open) => AppMsg::Open(open),
+                ComposeOutput::Finished(message) => AppMsg::Finished(message),
             });
+        let troubleshoot_page =
+            TroubleshootPage::builder()
+                .launch(daemon.clone())
+                .forward(sender.input_sender(), |output| match output {
+                    TroubleshootOutput::Problems(count) => AppMsg::Problems(count),
+                });
         for section in Section::ALL {
             match section {
+                Section::Troubleshoot => stack.add_named(troubleshoot_page.widget(), Some(section.name())),
                 Section::Compose => stack.add_named(compose_page.widget(), Some(section.name())),
                 Section::Containers => stack.add_named(containers_page.widget(), Some(section.name())),
                 Section::Images => stack.add_named(images_page.widget(), Some(section.name())),
                 Section::Volumes => stack.add_named(volumes_page.widget(), Some(section.name())),
                 Section::Networks => stack.add_named(networks_page.widget(), Some(section.name())),
-                _ => stack.add_named(&sections::placeholder(section, &daemon), Some(section.name())),
+                Section::Kubernetes => stack.add_named(&sections::placeholder(section, &daemon), Some(section.name())),
             };
         }
         let toasts = adw::ToastOverlay::new();
@@ -197,9 +224,9 @@ impl Component for App {
         root.add_breakpoint(narrow);
 
         install_actions(&root, &sender);
-        let keep_running = Rc::new(Cell::new(settings.keep_running));
+        let keep_running = Rc::clone(&settings);
         root.connect_close_request(move |window| {
-            if keep_running.get() {
+            if keep_running.borrow().keep_running {
                 window.set_visible(false);
                 glib::Propagation::Stop
             } else {
@@ -222,11 +249,16 @@ impl Component for App {
             section: Section::Containers,
             tray: None,
             tray_state: TrayState::default(),
+            tray_available: false,
+            settings,
+            background,
+            problems: 0,
             containers_page,
             images_page,
             _volumes_page: volumes_page,
             _networks_page: networks_page,
             _compose_page: compose_page,
+            _troubleshoot_page: troubleshoot_page,
         };
         if let Some(first) = rows.get(&Section::Containers) {
             list.select_row(Some(&first.row));
@@ -246,6 +278,7 @@ impl Component for App {
     fn update(&mut self, message: AppMsg, sender: ComponentSender<Self>, root: &Self::Root) {
         match message {
             AppMsg::Select(section) => self.section = section,
+            AppMsg::Present if self.background => self.background = false,
             AppMsg::Present => root.present(),
             AppMsg::OpenContainer(id) => {
                 root.present();
@@ -267,11 +300,41 @@ impl Component for App {
                 let daemon = self.daemon.clone();
                 sender.oneshot_command(async move {
                     match daemon.run(action).await {
-                        Ok(()) => AppCmd::Tray(None),
-                        Err(error) => AppCmd::EngineFailed(contr_daemon_ui::describe(&error)),
+                        Ok(()) => AppCmd::Failed(String::new()),
+                        Err(error) => AppCmd::Failed(contr_daemon_ui::describe(&error)),
                     }
                 });
             }
+            AppMsg::RestartContainer(id) => {
+                let Some(client) = self.status.running_client().cloned() else {
+                    return;
+                };
+                sender.oneshot_command(async move {
+                    let request = RestartContainerRequest {
+                        id,
+                        timeout_seconds: None,
+                    };
+                    match client.containers().restart_container(request).await {
+                        Ok(_) => AppCmd::Failed(String::new()),
+                        Err(status) => AppCmd::Failed(contr_daemon_ui::describe(&status.into())),
+                    }
+                });
+            }
+            AppMsg::Problems(count) => self.problems = count,
+            AppMsg::Finished(message) => {
+                if self.settings.borrow().notify_finished && !root.is_active() {
+                    notifications::finished(&message);
+                }
+            }
+            AppMsg::Preferences => preferences::present(
+                root,
+                &PreferencesContext {
+                    daemon: self.daemon.clone(),
+                    settings: Rc::clone(&self.settings),
+                    tray_available: self.tray_available,
+                },
+            ),
+            AppMsg::Shortcuts => shortcuts::present(root),
             AppMsg::Quit => relm4::main_application().quit(),
         }
     }
@@ -281,7 +344,7 @@ impl Component for App {
         widgets: &mut Self::Widgets,
         message: AppCmd,
         sender: ComponentSender<Self>,
-        _root: &Self::Root,
+        root: &Self::Root,
     ) {
         match message {
             AppCmd::Status(status) => self.status = *status,
@@ -289,15 +352,26 @@ impl Component for App {
                 self.containers = containers.into_iter().map(|c| (c.id.clone(), c)).collect();
             }
             AppCmd::Containers(ContainerEvent::Upserted(container)) => {
+                if self.settings.borrow().notify_container_errors
+                    && !root.is_active()
+                    && let Some(crash) = notifications::crash(self.containers.get(&container.id), &container)
+                {
+                    notifications::send_crash(&crash);
+                }
                 self.containers.insert(container.id.clone(), *container);
             }
             AppCmd::Containers(ContainerEvent::Removed(id)) => {
                 self.containers.remove(&id);
             }
-            AppCmd::Tray(Some(TrayHandle(handle))) => self.tray = Some(handle),
-            AppCmd::Tray(None) => {}
-            AppCmd::EngineFailed(message) => {
-                widgets.toasts.add_toast(adw::Toast::new(&message));
+            AppCmd::Tray(Some(TrayHandle(handle))) => {
+                self.tray = Some(handle);
+                self.tray_available = true;
+            }
+            AppCmd::Tray(None) => self.tray_available = false,
+            AppCmd::Failed(message) => {
+                if !message.is_empty() {
+                    widgets.toasts.add_toast(adw::Toast::new(&message));
+                }
             }
         }
         if !self.status.is_running() {
@@ -314,6 +388,11 @@ impl Component for App {
             let running = self.status.is_running();
             row.count.set_label(&self.containers.len().to_string());
             row.count.set_visible(running);
+        }
+        if let Some(row) = widgets.rows.get(&Section::Troubleshoot) {
+            row.count.set_label(&self.problems.to_string());
+            row.count.set_visible(self.problems > 0);
+            row.count.add_css_class("sidebar-badge");
         }
         for (section, capability) in [
             (Section::Compose, Capability::Compose),
@@ -412,6 +491,7 @@ fn sidebar(sender: &ComponentSender<App>) -> (gtk::ListBox, HashMap<Section, Sid
             .build();
         let count = gtk::Label::builder()
             .css_classes(["sidebar-count"])
+            .valign(gtk::Align::Center)
             .visible(false)
             .build();
         let content = gtk::Box::builder().spacing(12).build();
@@ -445,6 +525,8 @@ fn sidebar(sender: &ComponentSender<App>) -> (gtk::ListBox, HashMap<Section, Sid
 fn primary_menu(engine: &gio::Menu) -> gio::Menu {
     let menu = gio::Menu::new();
     let general = gio::Menu::new();
+    general.append(Some("Preferences"), Some("app.preferences"));
+    general.append(Some("Keyboard Shortcuts"), Some("app.shortcuts"));
     general.append(Some(&format!("About {}", product::DISPLAY_NAME)), Some("app.about"));
     menu.append_section(None, &general);
     menu.append_section(None, engine);
@@ -462,6 +544,23 @@ fn install_actions(window: &adw::ApplicationWindow, sender: &ComponentSender<App
     app.add_action(&action("quit", || AppMsg::Quit));
     app.add_action(&action("start-engine", || AppMsg::Engine(EngineAction::Start)));
     app.add_action(&action("stop-engine", || AppMsg::Engine(EngineAction::Stop)));
+    app.add_action(&action("preferences", || AppMsg::Preferences));
+    app.add_action(&action("shortcuts", || AppMsg::Shortcuts));
+    for (name, message) in [
+        ("open-logs", AppMsg::OpenContainer as fn(String) -> AppMsg),
+        ("restart-container", AppMsg::RestartContainer),
+    ] {
+        let action = gio::SimpleAction::new(name, Some(glib::VariantTy::STRING));
+        let input = sender.input_sender().clone();
+        action.connect_activate(move |_, id| {
+            if let Some(id) = id.and_then(glib::Variant::get::<String>) {
+                input.emit(message(id));
+            }
+        });
+        app.add_action(&action);
+    }
+    app.set_accels_for_action("app.preferences", &["<Control>comma"]);
+    app.set_accels_for_action("app.shortcuts", &["<Control>question"]);
     app.set_accels_for_action("app.quit", &["<Control>q"]);
     app.set_accels_for_action("window.close", &["<Control>w"]);
 
