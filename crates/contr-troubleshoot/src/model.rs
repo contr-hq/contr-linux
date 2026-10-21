@@ -6,17 +6,6 @@ use contr_sdk::api::diagnostics::v1::{Check, CheckStatus};
 use contr_sdk::api::engine::v1::EngineState;
 use contr_ui_common::widgets::StatusKind;
 
-/// Label of the button that runs a remediation; IDs come from `contr_core::Remediation`.
-pub(crate) fn remediation_label(remediation: &Remediation) -> String {
-    match remediation.action_id.as_str() {
-        "install-engine" => "Install an Engine…".to_owned(),
-        "join-docker-group" => "Add Me to the docker Group…".to_owned(),
-        "setup-rootless" => "Set Up Rootless Docker".to_owned(),
-        "install-wsl" => "Install WSL…".to_owned(),
-        other => other.to_owned(),
-    }
-}
-
 pub(crate) fn check_status(check: &Check) -> (StatusKind, &'static str) {
     match check.status() {
         CheckStatus::Pass => (StatusKind::Running, "Passed"),
@@ -141,6 +130,8 @@ pub(crate) fn problem_count(status: &Status, checks: &[Check]) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use contr_daemon_ui::remediation_label;
+
     use super::*;
 
     fn check(id: &str, status: CheckStatus, remediation: Option<&str>) -> Check {

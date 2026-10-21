@@ -9,6 +9,7 @@ use contr_core::product;
 use contr_daemon_ui::{Daemon, EngineAction, Status, TROUBLESHOOT_ACTION, engine_name, while_running};
 use contr_images::{ImagesMsg, ImagesOutput, ImagesPage};
 use contr_networks::{NetworksOutput, NetworksPage};
+use contr_onboarding::{OnboardingOutput, OnboardingPage};
 use contr_sdk::ClientIdentity;
 use contr_sdk::api::containers::v1::{
     Container, ContainerState, RestartContainerRequest, WatchContainersRequest, watch_containers_response,
@@ -27,6 +28,9 @@ use crate::preferences::{self, PreferencesContext};
 use crate::sections::{self, Section};
 use crate::tray::{self, ContrTray, RunningContainer, TrayState};
 use crate::{notifications, shortcuts};
+
+/// Name of the window's page that holds the sidebar and sections.
+const MAIN_PAGE: &str = "main";
 
 pub(crate) struct App {
     daemon: Daemon,
@@ -50,6 +54,8 @@ pub(crate) struct App {
     _compose_page: Controller<ComposePage>,
     /// Held only to keep the page running.
     _troubleshoot_page: Controller<TroubleshootPage>,
+    /// Shown instead of the sections until the user finishes or skips setup.
+    onboarding: Option<Controller<OnboardingPage>>,
 }
 
 #[derive(Debug)]
@@ -64,6 +70,7 @@ pub(crate) enum AppMsg {
     RestartContainer(String),
     Problems(usize),
     Finished(String),
+    Onboarded,
     Preferences,
     Shortcuts,
     Quit,
@@ -213,7 +220,22 @@ impl Component for App {
             .sidebar(&adw::NavigationPage::new(&sidebar_view, product::DISPLAY_NAME))
             .content(&adw::NavigationPage::new(&toasts, Section::Containers.title()))
             .build();
-        root.set_content(Some(&split));
+        let content = gtk::Stack::builder()
+            .transition_type(gtk::StackTransitionType::Crossfade)
+            .build();
+        content.add_named(&split, Some(MAIN_PAGE));
+        let onboarding = (!settings.borrow().onboarded).then(|| {
+            let onboarding = OnboardingPage::builder().launch(daemon.clone()).forward(
+                sender.input_sender(),
+                |output| match output {
+                    OnboardingOutput::Done => AppMsg::Onboarded,
+                },
+            );
+            content.add_named(onboarding.widget(), None);
+            content.set_visible_child(onboarding.widget());
+            onboarding
+        });
+        root.set_content(Some(&content));
 
         let narrow = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
             adw::BreakpointConditionLengthType::MaxWidth,
@@ -259,6 +281,7 @@ impl Component for App {
             _networks_page: networks_page,
             _compose_page: compose_page,
             _troubleshoot_page: troubleshoot_page,
+            onboarding,
         };
         if let Some(first) = rows.get(&Section::Containers) {
             list.select_row(Some(&first.row));
@@ -321,8 +344,21 @@ impl Component for App {
                 });
             }
             AppMsg::Problems(count) => self.problems = count,
+            AppMsg::Onboarded => {
+                self.settings.borrow_mut().onboarded = true;
+                if let Err(error) = self.settings.borrow().save() {
+                    tracing::warn!(%error, "could not save the client settings");
+                }
+                if let Some(onboarding) = self.onboarding.take() {
+                    let page = onboarding.widget().clone();
+                    if let Some(content) = page.parent().and_downcast::<gtk::Stack>() {
+                        content.set_visible_child_name(MAIN_PAGE);
+                        content.remove(&page);
+                    }
+                }
+            }
             AppMsg::Finished(message) => {
-                if self.settings.borrow().notify_finished && !root.is_active() {
+                if self.settings.borrow().notify.finished && !root.is_active() {
                     notifications::finished(&message);
                 }
             }
@@ -352,7 +388,7 @@ impl Component for App {
                 self.containers = containers.into_iter().map(|c| (c.id.clone(), c)).collect();
             }
             AppCmd::Containers(ContainerEvent::Upserted(container)) => {
-                if self.settings.borrow().notify_container_errors
+                if self.settings.borrow().notify.container_errors
                     && !root.is_active()
                     && let Some(crash) = notifications::crash(self.containers.get(&container.id), &container)
                 {

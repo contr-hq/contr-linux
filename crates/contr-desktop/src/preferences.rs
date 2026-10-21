@@ -139,17 +139,17 @@ fn general(state: &Rc<Dialog>, context: &PreferencesContext, status: &Status) ->
     let notifications = adw::PreferencesGroup::builder().title("Notifications").build();
     let errors = adw::SwitchRow::builder()
         .title("When a container stops with an error")
-        .active(context.settings.borrow().notify_container_errors)
+        .active(context.settings.borrow().notify.container_errors)
         .build();
     bind_client(&errors, &context.settings, state, |settings, active| {
-        settings.notify_container_errors = active;
+        settings.notify.container_errors = active;
     });
     let finished = adw::SwitchRow::builder()
         .title("When a pull or compose up finishes")
-        .active(context.settings.borrow().notify_finished)
+        .active(context.settings.borrow().notify.finished)
         .build();
     bind_client(&finished, &context.settings, state, |settings, active| {
-        settings.notify_finished = active;
+        settings.notify.finished = active;
     });
     notifications.add(&errors);
     notifications.add(&finished);

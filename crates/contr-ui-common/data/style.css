@@ -164,6 +164,17 @@ banner.error > revealer > widget {
   background-color: color-mix(in srgb, var(--error-bg-color) 14%, transparent);
 }
 
+.finish-icon {
+  padding: 18px;
+  border-radius: 999px;
+  color: var(--success-color);
+  background-color: color-mix(in srgb, var(--success-bg-color) 14%, transparent);
+}
+
+.note-card {
+  padding: 12px 14px;
+}
+
 .tinted-warning {
   background-color: color-mix(in srgb, var(--warning-bg-color) 10%, var(--card-bg-color));
 }

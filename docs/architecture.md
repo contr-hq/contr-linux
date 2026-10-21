@@ -88,6 +88,15 @@ outcome needs a new login offers to log out through `org.gnome.SessionManager`. 
 the daemon's user unit, falling back to the log file in the runtime directory, or the engine's unit. No RPC collects
 a diagnostics bundle, so that row stays disabled.
 
+## Onboarding
+
+Until the user finishes or skips it (`onboarded` in `desktop.json`), the window shows `contr-onboarding` instead of the
+sections. It shows the one engine the daemon manages, since no RPC lists the other engines on the computer, so there
+is nothing to choose between yet. The fixes come from the failing checks of `RunChecks`: installing an engine gets its
+own row, and the rest sit under the engine, with a warning before joining the docker group. A running fix shows the
+steps `RunRemediation` reports; one that needs a new session ends on a page that logs out through
+`org.gnome.SessionManager`. `contr_daemon_ui::run_remediation` and `contr_ui_common::session` serve Troubleshoot too.
+
 ## Capabilities
 
 The sidebar shows Compose and Kubernetes only when the handshake advertises `CAPABILITY_COMPOSE` and

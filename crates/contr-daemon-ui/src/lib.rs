@@ -4,11 +4,13 @@
 mod attachments;
 mod daemon;
 mod gate;
+mod remediation;
 mod settings;
 
 pub use attachments::{Attachment, engine_kind, engine_name, follow_attachments};
 pub use daemon::{Daemon, EngineAction, Link, Status, while_running};
 pub use gate::{EngineGate, TROUBLESHOOT_ACTION};
+pub use remediation::{remediation_label, run_remediation};
 pub use settings::{SettingsHandle, field_mask};
 
 use std::time::{Duration, SystemTime};
