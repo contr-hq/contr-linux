@@ -1,10 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use contr_containers_api::{ContainerTab, OpenContainer};
-use contr_daemon_ui::{
-    Attachment, Daemon, EngineGate, Status, container_networks, describe, follow_attachments, while_running,
-};
-use contr_sdk::api::containers::v1::NetworkAttachment;
+use contr_daemon_ui::{Attachment, Daemon, EngineGate, Status, describe, follow_attachments, while_running};
 use contr_sdk::api::networks::v1::{
     ConnectNetworkRequest, CreateNetworkRequest, DisconnectNetworkRequest, Network, RemoveNetworkRequest, Subnet,
     WatchNetworksRequest, watch_networks_response,
@@ -69,12 +66,6 @@ pub enum NetworksCmd {
     Upserted(Box<Network>),
     Removed(String),
     Attachments(Vec<Attachment>),
-    /// A container joined or left a network; carries its networks now.
-    Rejoined {
-        message: String,
-        container: String,
-        networks: Vec<NetworkAttachment>,
-    },
     Done(Result<String, String>),
 }
 
@@ -223,42 +214,28 @@ impl Component for NetworksPage {
                 network,
                 container,
                 aliases,
-            } => {
-                let message = format!("Connected to {network}");
+            } => self.call(&sender, move |client| async move {
                 let request = ConnectNetworkRequest {
-                    network,
-                    container: container.clone(),
+                    network: network.clone(),
+                    container,
                     aliases,
                 };
-                self.rejoin(&sender, container, message, |client| async move {
-                    client
-                        .networks()
-                        .connect_network(request)
-                        .await
-                        .map(|_| ())
-                        .map_err(Error::from)
-                });
-            }
+                client.networks().connect_network(request).await?;
+                Ok(format!("Connected to {network}"))
+            }),
             NetworksMsg::Disconnect {
                 network,
                 container,
                 name,
-            } => {
-                let message = format!("Disconnected {name} from {network}");
+            } => self.call(&sender, move |client| async move {
                 let request = DisconnectNetworkRequest {
-                    network,
-                    container: container.clone(),
+                    network: network.clone(),
+                    container,
                     force: false,
                 };
-                self.rejoin(&sender, container, message, |client| async move {
-                    client
-                        .networks()
-                        .disconnect_network(request)
-                        .await
-                        .map(|_| ())
-                        .map_err(Error::from)
-                });
-            }
+                client.networks().disconnect_network(request).await?;
+                Ok(format!("Disconnected {name} from {network}"))
+            }),
             NetworksMsg::ConfirmCreate { name, subnet, internal } => {
                 self.call(&sender, move |client| async move {
                     let request = CreateNetworkRequest {
@@ -317,20 +294,6 @@ impl Component for NetworksPage {
                 self.networks.remove(&id);
             }
             NetworksCmd::Attachments(attachments) => self.attachments = attachments,
-            NetworksCmd::Rejoined {
-                message,
-                container,
-                networks,
-            } => {
-                if let Some(attachment) = self
-                    .attachments
-                    .iter_mut()
-                    .find(|attachment| attachment.id == container)
-                {
-                    attachment.networks = networks;
-                }
-                root.add_toast(adw::Toast::new(&message));
-            }
             NetworksCmd::Done(Ok(message) | Err(message)) => {
                 if !message.is_empty() {
                     root.add_toast(adw::Toast::new(&message));
@@ -481,28 +444,6 @@ impl NetworksPage {
         }
         row.add_row(&gtk::ListBoxRow::builder().child(&footer).activatable(false).build());
         row
-    }
-
-    /// Runs `change` on `container`'s networks, then reads them again for the page.
-    fn rejoin<F, Fut>(&self, sender: &ComponentSender<Self>, container: String, message: String, change: F)
-    where
-        F: FnOnce(Client) -> Fut + Send + 'static,
-        Fut: Future<Output = Result<(), Error>> + Send,
-    {
-        let Some(client) = self.status.running_client().cloned() else {
-            return;
-        };
-        sender.oneshot_command(async move {
-            if let Err(error) = change(client.clone()).await {
-                return NetworksCmd::Done(Err(describe(&error)));
-            }
-            let networks = container_networks(&client, &container).await.unwrap_or_default();
-            NetworksCmd::Rejoined {
-                message,
-                container,
-                networks,
-            }
-        });
     }
 
     fn call<F, Fut>(&self, sender: &ComponentSender<Self>, call: F)
