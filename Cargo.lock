@@ -220,6 +220,7 @@ dependencies = [
  "contr-daemon-ui",
  "contr-images",
  "contr-networks",
+ "contr-onboarding",
  "contr-sdk",
  "contr-troubleshoot",
  "contr-ui-common",
@@ -251,6 +252,17 @@ name = "contr-networks"
 version = "0.1.0"
 dependencies = [
  "contr-containers-api",
+ "contr-daemon-ui",
+ "contr-sdk",
+ "contr-ui-common",
+ "relm4",
+]
+
+[[package]]
+name = "contr-onboarding"
+version = "0.1.0"
+dependencies = [
+ "contr-core",
  "contr-daemon-ui",
  "contr-sdk",
  "contr-ui-common",
