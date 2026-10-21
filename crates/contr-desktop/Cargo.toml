@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+contr-compose.workspace = true
 contr-containers.workspace = true
 contr-containers-api.workspace = true
 contr-core.workspace = true

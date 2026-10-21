@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
+use contr_compose::{ComposeOutput, ComposePage};
 use contr_containers::{ContainersMsg, ContainersOutput, ContainersPage};
 use contr_containers_api::{ContainerTab, OpenContainer, RunImage};
 use contr_core::product;
@@ -35,6 +36,8 @@ pub(crate) struct App {
     _volumes_page: Controller<VolumesPage>,
     /// Held only to keep the page running.
     _networks_page: Controller<NetworksPage>,
+    /// Held only to keep the page running.
+    _compose_page: Controller<ComposePage>,
 }
 
 #[derive(Debug)]
@@ -159,8 +162,14 @@ impl Component for App {
             .forward(sender.input_sender(), |output| match output {
                 NetworksOutput::OpenContainer(open) => AppMsg::Open(open),
             });
+        let compose_page = ComposePage::builder()
+            .launch(daemon.clone())
+            .forward(sender.input_sender(), |output| match output {
+                ComposeOutput::OpenContainer(open) => AppMsg::Open(open),
+            });
         for section in Section::ALL {
             match section {
+                Section::Compose => stack.add_named(compose_page.widget(), Some(section.name())),
                 Section::Containers => stack.add_named(containers_page.widget(), Some(section.name())),
                 Section::Images => stack.add_named(images_page.widget(), Some(section.name())),
                 Section::Volumes => stack.add_named(volumes_page.widget(), Some(section.name())),
@@ -217,6 +226,7 @@ impl Component for App {
             images_page,
             _volumes_page: volumes_page,
             _networks_page: networks_page,
+            _compose_page: compose_page,
         };
         if let Some(first) = rows.get(&Section::Containers) {
             list.select_row(Some(&first.row));

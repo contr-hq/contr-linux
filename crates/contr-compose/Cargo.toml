@@ -1,0 +1,20 @@
+[package]
+name = "contr-compose"
+description = "The Compose section of the Contr Linux client: projects, their actions, services and logs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+contr-containers-api.workspace = true
+contr-daemon-ui.workspace = true
+contr-sdk.workspace = true
+contr-ui-common.workspace = true
+relm4.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[lints]
+workspace = true

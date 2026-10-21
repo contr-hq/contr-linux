@@ -153,6 +153,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "contr-compose"
+version = "0.1.0"
+dependencies = [
+ "contr-containers-api",
+ "contr-daemon-ui",
+ "contr-sdk",
+ "contr-ui-common",
+ "relm4",
+ "tokio",
+]
+
+[[package]]
 name = "contr-containers"
 version = "0.1.0"
 dependencies = [
@@ -201,6 +213,7 @@ name = "contr-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "contr-compose",
  "contr-containers",
  "contr-containers-api",
  "contr-core",
