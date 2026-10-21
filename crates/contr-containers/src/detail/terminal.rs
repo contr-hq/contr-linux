@@ -13,6 +13,8 @@ use vte4::prelude::*;
 const SHELLS: [&str; 2] = ["/bin/sh", "/bin/bash"];
 /// Time the shell gets to exit on end of input before the session is dropped.
 const CLOSE_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+/// Ctrl-D: a shell reading its prompt exits on it.
+const END_OF_TRANSMISSION: u8 = 0x04;
 
 enum Input {
     Bytes(Vec<u8>),
@@ -325,10 +327,12 @@ impl TerminalView {
         });
     }
 
-    /// Closes the shell's stdin before dropping the session: the engine keeps an exec running after its client leaves.
+    /// Sends Ctrl-D, which ends a shell at its prompt, then closes stdin before dropping the session: the engine keeps
+    /// an exec with a terminal running after its client leaves, as Docker does.
     fn disconnect(&self) {
         let session = self.0.state.borrow_mut().session.take();
         if let Some(session) = session {
+            let _ = session.input.send(Input::Bytes(vec![END_OF_TRANSMISSION]));
             let _ = session.input.send(Input::Close);
             glib::timeout_add_local_once(CLOSE_GRACE, move || session.task.abort());
         }
