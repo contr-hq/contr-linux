@@ -21,6 +21,7 @@ pub(crate) struct TrayState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RunningContainer {
+    pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) address: String,
 }
@@ -86,7 +87,8 @@ impl ksni::Tray for ContrTray {
                     } else {
                         format!("{}    {}", container.name, container.address)
                     };
-                    item(&text, |tray| tray.input.emit(AppMsg::Present))
+                    let id = container.id.clone();
+                    item(&text, move |tray| tray.input.emit(AppMsg::OpenContainer(id.clone())))
                 })
                 .collect();
             items.push(

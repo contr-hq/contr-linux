@@ -2,6 +2,8 @@ use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
+use contr_containers::{ContainersMsg, ContainersPage};
+use contr_containers_api::{ContainerTab, OpenContainer};
 use contr_core::product;
 use contr_daemon_ui::{Daemon, EngineAction, Status, TROUBLESHOOT_ACTION, while_running};
 use contr_sdk::ClientIdentity;
@@ -10,7 +12,7 @@ use contr_sdk::api::daemon::v1::Capability;
 use contr_sdk::api::engine::v1::EngineState;
 use relm4::adw::{self, prelude::*};
 use relm4::gtk::{self, gio, glib};
-use relm4::{Component, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 
 use crate::client_settings::ClientSettings;
 use crate::engine_card::{EngineCard, engine_name};
@@ -24,12 +26,14 @@ pub(crate) struct App {
     section: Section,
     tray: Option<ksni::Handle<ContrTray>>,
     tray_state: TrayState,
+    containers_page: Controller<ContainersPage>,
 }
 
 #[derive(Debug)]
 pub(crate) enum AppMsg {
     Select(Section),
     Present,
+    OpenContainer(String),
     Engine(EngineAction),
     Quit,
 }
@@ -121,8 +125,12 @@ impl Component for App {
         let stack = gtk::Stack::builder()
             .transition_type(gtk::StackTransitionType::Crossfade)
             .build();
+        let containers_page = ContainersPage::builder().launch(daemon.clone()).detach();
         for section in Section::ALL {
-            stack.add_named(&sections::placeholder(section, &daemon), Some(section.name()));
+            match section {
+                Section::Containers => stack.add_named(containers_page.widget(), Some(section.name())),
+                _ => stack.add_named(&sections::placeholder(section, &daemon), Some(section.name())),
+            };
         }
         let toasts = adw::ToastOverlay::new();
         toasts.set_child(Some(&stack));
@@ -169,6 +177,7 @@ impl Component for App {
             section: Section::Containers,
             tray: None,
             tray_state: TrayState::default(),
+            containers_page,
         };
         if let Some(first) = rows.get(&Section::Containers) {
             list.select_row(Some(&first.row));
@@ -189,6 +198,14 @@ impl Component for App {
         match message {
             AppMsg::Select(section) => self.section = section,
             AppMsg::Present => root.present(),
+            AppMsg::OpenContainer(id) => {
+                root.present();
+                self.section = Section::Containers;
+                self.containers_page.emit(ContainersMsg::Open(OpenContainer {
+                    id,
+                    tab: ContainerTab::Logs,
+                }));
+            }
             AppMsg::Engine(action) => {
                 let daemon = self.daemon.clone();
                 sender.oneshot_command(async move {
@@ -297,6 +314,7 @@ fn tray_state(status: &Status, containers: &BTreeMap<String, Container>) -> Tray
         .values()
         .filter(|container| container.state() == ContainerState::Running)
         .map(|container| RunningContainer {
+            id: container.id.clone(),
             name: container.names.first().cloned().unwrap_or_else(|| container.id.clone()),
             address: container
                 .ports
