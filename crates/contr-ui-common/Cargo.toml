@@ -1,0 +1,20 @@
+[package]
+name = "contr-ui-common"
+description = "Widgets, styles, icons and formatting shared by the Contr Linux client's modules."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+contr-core.workspace = true
+relm4.workspace = true
+
+[build-dependencies]
+contr-core.workspace = true
+glib-build-tools.workspace = true
+
+[lints]
+workspace = true

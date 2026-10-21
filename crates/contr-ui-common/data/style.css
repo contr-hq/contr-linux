@@ -1,0 +1,172 @@
+/* Loaded by AdwApplication from the resource base path; dark overrides sit in the media query at the end. */
+
+.sidebar-list {
+  padding: 6px;
+}
+
+.sidebar-count {
+  font-size: 13px;
+  font-feature-settings: "tnum";
+  color: var(--dim-label-color, alpha(currentColor, .55));
+}
+
+.sidebar-dot {
+  min-width: 8px;
+  min-height: 8px;
+  border-radius: 4px;
+  background-color: var(--success-bg-color);
+}
+
+.engine-card {
+  margin: 12px;
+  padding: 12px;
+}
+
+.engine-card .title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.engine-card .subtitle {
+  font-size: 13px;
+}
+
+.engine-card.failed {
+  background-color: color-mix(in srgb, var(--error-bg-color) 12%, var(--card-bg-color));
+}
+
+.engine-card.failed .title {
+  color: var(--error-color);
+}
+
+.status-running { color: var(--success-color); }
+.status-failed { color: var(--error-color); }
+.status-paused { color: var(--warning-color); }
+.status-stopped,
+.status-created { color: var(--dim-label-color, alpha(currentColor, .55)); }
+
+.row-subtitle-error { color: var(--error-color); }
+
+.port-link {
+  font-size: 14px;
+  padding: 0 4px;
+  margin-right: 2px;
+}
+
+.group-title {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.group-description {
+  font-size: 13px;
+}
+
+banner.error > revealer > widget {
+  background-color: color-mix(in srgb, var(--error-bg-color) 8%, var(--window-bg-color));
+}
+
+.console {
+  background-color: #1e1e1e;
+  color: #deddda;
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px alpha(black, .08), 0 1px 3px 1px alpha(black, .07);
+}
+
+.console-toolbar {
+  background-color: #2a2a2e;
+  color: alpha(white, .87);
+  font-size: 13px;
+  padding: 6px 6px 6px 12px;
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
+}
+
+.console-toolbar button {
+  color: white;
+  min-height: 28px;
+  padding: 0 10px;
+}
+
+.console-toolbar button.raised,
+.console-toolbar dropdown > button {
+  background-color: alpha(white, .1);
+}
+
+.console textview,
+.console textview text {
+  background-color: transparent;
+  color: #deddda;
+  font-family: "Adwaita Mono", monospace;
+  font-size: 13px;
+}
+
+.mono {
+  font-family: "Adwaita Mono", monospace;
+}
+
+.inline-code {
+  font-family: "Adwaita Mono", monospace;
+  font-size: 12px;
+  background-color: alpha(currentColor, .06);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.detail-title {
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.chip {
+  border-radius: 999px;
+  padding: 0 8px;
+  min-height: 22px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chip.accent {
+  background-color: color-mix(in srgb, var(--accent-bg-color) 15%, transparent);
+  color: var(--accent-color);
+}
+
+.chip.neutral {
+  background-color: alpha(currentColor, .08);
+}
+
+.chip.success {
+  background-color: color-mix(in srgb, var(--success-bg-color) 15%, transparent);
+}
+
+.chip.error {
+  background-color: color-mix(in srgb, var(--error-bg-color) 12%, transparent);
+}
+
+.chip.warning {
+  background-color: color-mix(in srgb, var(--warning-bg-color) 18%, transparent);
+}
+
+.tinted-error {
+  background-color: color-mix(in srgb, var(--error-bg-color) 8%, var(--card-bg-color));
+}
+
+.tinted-warning {
+  background-color: color-mix(in srgb, var(--warning-bg-color) 10%, var(--card-bg-color));
+}
+
+.tinted-accent {
+  background-color: color-mix(in srgb, var(--accent-bg-color) 8%, var(--window-bg-color));
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.sparkline-card {
+  padding: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .console {
+    box-shadow: 0 0 0 1px alpha(white, .08);
+  }
+}

@@ -1,0 +1,22 @@
+[package]
+name = "contr-daemon-ui"
+description = "The Contr Linux client's single daemon connection and the engine gate every engine page shows."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+contr-core.workspace = true
+contr-sdk.workspace = true
+contr-ui-common.workspace = true
+prost-types.workspace = true
+relm4.workspace = true
+tokio = { workspace = true, features = ["macros", "sync", "time"] }
+tonic.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

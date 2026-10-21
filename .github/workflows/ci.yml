@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - run: cargo fmt --all --check
+
+  check:
+    name: check (${{ matrix.distro }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: fedora-44
+            image: fedora:44
+            packages: >-
+              dnf install -y --setopt=install_weak_deps=False
+              gcc git tar zstd pkgconf-pkg-config glib2-devel gtk4-devel libadwaita-devel vte291-gtk4-devel
+          - distro: ubuntu-26.04
+            image: ubuntu:26.04
+            packages: >-
+              apt-get update && apt-get install -y --no-install-recommends
+              build-essential ca-certificates curl git zstd pkg-config libglib2.0-dev-bin
+              libgtk-4-dev libadwaita-1-dev libvte-2.91-gtk4-dev
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    steps:
+      - run: ${{ matrix.packages }}
+      - uses: actions/checkout@v7
+      - name: Install rustup
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.distro }}
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace --all-features
+      - run: cargo xtask archlint
+
+  comments:
+    uses: contr-hq/.github/.github/workflows/comment-lint.yml@main
