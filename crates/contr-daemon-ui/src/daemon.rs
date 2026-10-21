@@ -13,6 +13,9 @@ use tokio::sync::watch;
 
 use crate::{RETRY_DELAY, describe};
 
+const ENGINE_INFO_ATTEMPTS: u32 = 5;
+const ENGINE_INFO_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+
 /// How the client reaches the daemon.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Link {
@@ -179,7 +182,7 @@ async fn follow_engine(state: &watch::Sender<Status>, client: &Client) -> Result
     while let Some(update) = states.message().await? {
         let engine = update.state();
         let engine_info = if engine == EngineState::Running {
-            client.info().await.ok().and_then(|info| info.engine)
+            engine_info(client).await
         } else {
             None
         };
@@ -196,6 +199,18 @@ async fn follow_engine(state: &watch::Sender<Status>, client: &Client) -> Result
         });
     }
     Ok(())
+}
+
+/// `GetInfo` can describe the engine a moment after the state turns `Running`, so a missing description is asked for
+/// again a few times.
+async fn engine_info(client: &Client) -> Option<EngineInfo> {
+    for _ in 0..ENGINE_INFO_ATTEMPTS {
+        if let Some(info) = client.info().await.ok().and_then(|info| info.engine) {
+            return Some(info);
+        }
+        tokio::time::sleep(ENGINE_INFO_DELAY).await;
+    }
+    None
 }
 
 enum Event {
