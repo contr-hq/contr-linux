@@ -1,6 +1,10 @@
-//! Repository automation: `cargo xtask archlint` checks which workspace crates may depend on which.
+//! Repository automation: `cargo xtask archlint` checks which workspace crates may depend on which, and
+//! `cargo xtask package-linux` builds the Debian and RPM packages.
+
+mod linux_packages;
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, bail};
@@ -14,10 +18,21 @@ const UI_COMMON: &str = "contr-ui-common";
 const SHELL: [&str; 4] = [DESKTOP, DAEMON_UI, UI_COMMON, "xtask"];
 
 fn main() -> anyhow::Result<()> {
-    match std::env::args().nth(1).as_deref() {
+    let mut args = std::env::args().skip(1);
+    match args.next().as_deref() {
         Some("archlint") => archlint(),
-        _ => bail!("usage: cargo xtask archlint"),
+        Some("package-linux") => linux_packages::build(&workspace_root(), &linux_packages::Options::parse(args)?),
+        _ => bail!(
+            "usage: cargo xtask archlint | cargo xtask package-linux --deb-binary PATH --rpm-binary PATH \
+             [--version VERSION] [--out DIR]"
+        ),
     }
+}
+
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
 fn archlint() -> anyhow::Result<()> {

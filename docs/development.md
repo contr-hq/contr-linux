@@ -39,6 +39,22 @@ GDK_BACKEND=broadway BROADWAY_DISPLAY=:5 ADW_DEBUG_COLOR_SCHEME=prefer-light ADW
 and open `http://127.0.0.1:8085`. Distribution defaults such as Ubuntu's Yaru theme still apply; a keyfile GSettings
 backend (`GSETTINGS_BACKEND=keyfile` with `gtk-theme='Adwaita'`) gives the stock look the design uses.
 
+## Packages
+
+The `contr` .deb and .rpm hold `contr-desktop`, its desktop entry, AppStream metainfo and icon, and depend on the
+`contr-daemon` package from contr-hq/contr. Each links against its own distribution's GTK, so the binary for the .deb
+is built on Ubuntu 26.04 and the one for the .rpm on Fedora 44 (`.github/workflows/release.yml` does both). With the
+two binaries and the crate notices from cargo-about:
+
+```sh
+cargo about generate --config packaging/licenses/about.toml --output-file target/notices/rust-crates.txt \
+  packaging/licenses/about.hbs
+cargo xtask package-linux --deb-binary PATH --rpm-binary PATH --version 0.1.0
+```
+
+nfpm runs in `packaging/linux/package.Dockerfile` through `docker buildx`, which must be Docker Engine's plugin, not
+Docker Desktop's; the packages land in `target/dist`.
+
 ## Checks before every push
 
 ```sh

@@ -1,0 +1,5 @@
+# Licenses the client's crates use; cargo-about refuses any other.
+accepted = ["Apache-2.0", "BSD-3-Clause", "MIT", "Unicode-3.0", "Unlicense", "Zlib"]
+targets = ["x86_64-unknown-linux-gnu"]
+ignore-dev-dependencies = true
+ignore-build-dependencies = true

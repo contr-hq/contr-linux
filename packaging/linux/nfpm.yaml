@@ -1,0 +1,71 @@
+# Debian and RPM packages of the desktop client. `cargo xtask package-linux` runs nfpm in package.Dockerfile once
+# per packager, with archive/ holding that packager's archive (a build linked against its distribution's GTK) and
+# linux/ holding this directory.
+name: contr
+arch: amd64
+platform: linux
+version: ${VERSION}
+version_schema: semver
+section: devel
+priority: optional
+maintainer: Contr <contr-hq@users.noreply.github.com>
+vendor: Contr
+homepage: https://github.com/contr-hq/contr-linux
+license: Apache-2.0
+description: |-
+  Desktop app for running and managing containers
+  Contr shows the containers, images, volumes, networks, Compose projects and Kubernetes cluster of the engine that
+  the contr-daemon package manages, with each container's logs, a terminal and live statistics.
+
+contents:
+  # RPM removes only the directories a package owns.
+  - dst: /usr/share/doc/contr
+    type: dir
+    file_info: {mode: 0755}
+  - dst: /usr/share/licenses/contr
+    type: dir
+    file_info: {mode: 0755}
+    packager: rpm
+  - src: archive/contr-desktop
+    dst: /usr/bin/contr-desktop
+    file_info: {mode: 0755}
+  - src: linux/io.github.contr_hq.Contr.desktop
+    dst: /usr/share/applications/io.github.contr_hq.Contr.desktop
+    file_info: {mode: 0644}
+  - src: linux/io.github.contr_hq.Contr.metainfo.xml
+    dst: /usr/share/metainfo/io.github.contr_hq.Contr.metainfo.xml
+    file_info: {mode: 0644}
+  - src: archive/io.github.contr_hq.Contr.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/io.github.contr_hq.Contr.svg
+    file_info: {mode: 0644}
+  - src: archive/THIRD-PARTY-NOTICES.md
+    dst: /usr/share/doc/contr/THIRD-PARTY-NOTICES.md
+    file_info: {mode: 0644}
+  - src: archive/LICENSE
+    dst: /usr/share/doc/contr/copyright
+    file_info: {mode: 0644}
+    packager: deb
+  - src: archive/LICENSE
+    dst: /usr/share/licenses/contr/LICENSE
+    type: license
+    file_info: {mode: 0644}
+    packager: rpm
+
+overrides:
+  # The deb is built on Ubuntu 26.04 and the rpm on Fedora 44; see .github/workflows/release.yml.
+  deb:
+    depends:
+      - contr-daemon (>= 0.1.0~)
+      - libc6 (>= 2.43)
+      - libgtk-4-1 (>= 4.20)
+      - libadwaita-1-0 (>= 1.8)
+      - libvte-2.91-gtk4-0 (>= 0.76)
+    suggests: [gnome-shell-extension-appindicator]
+  rpm:
+    depends:
+      - contr-daemon >= 0.1.0~
+      - glibc >= 2.43
+      - gtk4 >= 4.20
+      - libadwaita >= 1.8
+      - vte291-gtk4 >= 0.76
+    suggests: [gnome-shell-extension-appindicator]
