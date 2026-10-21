@@ -72,6 +72,13 @@ Which container mounts a volume or joins a network is known only from `InspectCo
 Volumes and Networks combine it with `WatchVolumes` and `WatchNetworks`. The API reports no volume sizes, so the pages
 show none. Networks has no "Connect a container…" action, since no RPC connects one.
 
+## Compose
+
+`contr-compose` follows `ComposeService.WatchProjects`, which sends every project after each change, and forwards the
+open project to its page. A project page runs `RunAction` for Up, Pull, Restart, Stop and Down, showing Compose's
+output lines while it runs and its last lines in a dialog when it fails. Logs follow the project's `StreamLogs`,
+filtered by service, and restart when the set of running containers changes.
+
 ## Capabilities
 
 The sidebar shows Compose and Kubernetes only when the handshake advertises `CAPABILITY_COMPOSE` and

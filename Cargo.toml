@@ -11,6 +11,7 @@ repository = "https://github.com/contr-hq/contr-linux"
 publish = false
 
 [workspace.dependencies]
+contr-compose = { path = "crates/contr-compose" }
 contr-containers = { path = "crates/contr-containers" }
 contr-containers-api = { path = "crates/contr-containers-api" }
 contr-daemon-ui = { path = "crates/contr-daemon-ui" }

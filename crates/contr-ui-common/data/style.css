@@ -257,6 +257,19 @@ progressbar.success > trough > progress {
   padding: 8px 10px;
 }
 
+button.chip-toggle {
+  min-height: 28px;
+  padding: 0 12px;
+  border-radius: 14px;
+  font-size: 13px;
+}
+
+button.chip-toggle:checked {
+  background-color: color-mix(in srgb, var(--accent-bg-color) 15%, transparent);
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
 @media (prefers-color-scheme: dark) {
   .console {
     box-shadow: 0 0 0 1px alpha(white, .08);
