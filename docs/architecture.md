@@ -50,7 +50,7 @@ The sidebar shows Compose and Kubernetes only when the handshake advertises `CAP
 ## Resources
 
 `contr-ui-common/build.rs` compiles `data/` into a GResource bundle at the resource base path derived from
-`contr_core::product::APP_ID`. `AdwApplication` loads `style.css` and `style-dark.css` from it, and GTK finds the
+`contr_core::product::APP_ID`. `AdwApplication` loads `style.css` from it (dark overrides in a `prefers-color-scheme` media query), and GTK finds the
 icons under its `icons/` directory. relm4 creates the application before it has an ID, so `main` sets the resource
 base path itself.
 

@@ -13,7 +13,6 @@ fn main() {
 
     let mut files = String::new();
     let _ = writeln!(files, "    <file>style.css</file>");
-    let _ = writeln!(files, "    <file>style-dark.css</file>");
     let _ = writeln!(
         files,
         "    <file alias=\"icons/scalable/apps/{}.svg\">icons/scalable/apps/app.svg</file>",

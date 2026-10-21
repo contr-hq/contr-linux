@@ -1,4 +1,4 @@
-/* Loaded by AdwApplication from the resource base path. */
+/* Loaded by AdwApplication from the resource base path; dark overrides sit in the media query at the end. */
 
 .sidebar-list {
   padding: 6px;
@@ -163,4 +163,10 @@ banner.error > revealer > widget {
 
 .sparkline-card {
   padding: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .console {
+    box-shadow: 0 0 0 1px alpha(white, .08);
+  }
 }
