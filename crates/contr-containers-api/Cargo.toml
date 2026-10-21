@@ -1,0 +1,12 @@
+[package]
+name = "contr-containers-api"
+description = "Types other modules use to reach the containers module."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

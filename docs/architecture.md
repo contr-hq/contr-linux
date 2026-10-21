@@ -42,6 +42,19 @@ GTK objects stay on the main thread. SDK calls run on relm4's tokio runtime, eit
 from a `glib` future on the main thread. tonic channels need the tokio runtime, so SDK futures are never polled by the
 GLib main loop directly.
 
+## Containers
+
+`contr-containers` follows `ContainersService.WatchContainers` and `WatchContainerStats` while the engine runs and
+groups the list by the `com.docker.compose.project` label, standalone containers last. A container that this client
+saw running and then exit with a non-zero code raises the banner. Rows are reconciled in place by container ID, so the
+two-second stats updates never rebuild the list.
+
+The container page has four views. Logs follows `StreamLogs` with timestamps and reopens it from the last timestamp
+when the container starts again. Inspect summarises `InspectContainer` and shows its raw JSON; environment values stay
+hidden until asked for. Terminal runs a shell through `Exec` with a pseudo-terminal in a VTE widget and closes the
+shell's stdin on disconnect, since the engine keeps an exec running after its client leaves. Stats plots the
+`StreamStats` samples received since the view opened; the daemon keeps no history.
+
 ## Capabilities
 
 The sidebar shows Compose and Kubernetes only when the handshake advertises `CAPABILITY_COMPOSE` and
@@ -50,9 +63,9 @@ The sidebar shows Compose and Kubernetes only when the handshake advertises `CAP
 ## Resources
 
 `contr-ui-common/build.rs` compiles `data/` into a GResource bundle at the resource base path derived from
-`contr_core::product::APP_ID`. `AdwApplication` loads `style.css` from it (dark overrides in a `prefers-color-scheme` media query), and GTK finds the
-icons under its `icons/` directory. relm4 creates the application before it has an ID, so `main` sets the resource
-base path itself.
+`contr_core::product::APP_ID`. `AdwApplication` loads `style.css` from it, with dark overrides in a
+`prefers-color-scheme` media query, and GTK finds the icons under its `icons/` directory. relm4 creates the
+application before it has an ID, so `main` sets the resource base path itself.
 
 Icons are 16 px symbolic SVGs drawn with strokes, marked `foreground-stroke transparent-fill` so GTK 4.20 and later
 recolor them.
