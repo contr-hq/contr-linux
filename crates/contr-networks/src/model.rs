@@ -107,6 +107,26 @@ pub(crate) fn sections(
     (yours, built_in)
 }
 
+/// Containers that can join the network `view` shows: every container not on it yet, as `(id, name)` by name.
+pub(crate) fn connectable(view: &NetworkView, attachments: &[Attachment]) -> Vec<(String, String)> {
+    let mut choices: Vec<(String, String)> = attachments
+        .iter()
+        .filter(|attachment| !view.members.iter().any(|member| member.id == attachment.id))
+        .map(|attachment| (attachment.id.clone(), attachment.name.clone()))
+        .collect();
+    choices.sort_by(|a, b| a.1.cmp(&b.1));
+    choices
+}
+
+/// `api, api.local` as the aliases `api` and `api.local`.
+pub(crate) fn aliases(text: &str) -> Vec<String> {
+    text.split([',', ' '])
+        .map(str::trim)
+        .filter(|alias| !alias.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -169,5 +189,35 @@ mod tests {
         assert_eq!(names, ["bridge", "host", "none"]);
         assert_eq!(built_in[0].subtitle, "172.17.0.0/16 · no containers");
         assert_eq!(built_in[1].subtitle, "Shares this computer’s network");
+    }
+
+    #[test]
+    fn only_containers_off_the_network_can_join_it() {
+        let view = NetworkView {
+            id: "n".to_owned(),
+            name: "shop".to_owned(),
+            subtitle: String::new(),
+            members: vec![Member {
+                id: "a".to_owned(),
+                name: "api".to_owned(),
+                address: String::new(),
+                running: true,
+            }],
+            compose_project: None,
+        };
+        let attachment = |id: &str, name: &str| Attachment {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            running: true,
+            mounts: Vec::new(),
+            networks: Vec::new(),
+        };
+        let attachments = [attachment("a", "api"), attachment("w", "worker"), attachment("d", "db")];
+        assert_eq!(
+            connectable(&view, &attachments),
+            [("d".to_owned(), "db".to_owned()), ("w".to_owned(), "worker".to_owned())]
+        );
+        assert_eq!(aliases(" api, api.local  cache "), ["api", "api.local", "cache"]);
+        assert!(aliases("  ").is_empty());
     }
 }
