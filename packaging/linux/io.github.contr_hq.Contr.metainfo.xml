@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.contr_hq.Contr</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+  <name>Contr</name>
+  <summary>Run and manage containers</summary>
+  <description>
+    <p>
+      Contr shows the containers, images, volumes, networks, Compose projects and Kubernetes cluster of the container
+      engine on this computer, and manages the engine itself.
+    </p>
+    <ul>
+      <li>Follow each container's logs, open a terminal in it, inspect it and watch its CPU, memory and network use</li>
+      <li>Run images with published ports, pull images and clean up what no container uses</li>
+      <li>Start, stop and follow Compose projects service by service</li>
+      <li>Turn on a single-node Kubernetes cluster that runs on the engine</li>
+      <li>Find out why the engine does not work and fix it from the app</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.contr_hq.Contr.desktop</launchable>
+  <provides>
+    <binary>contr-desktop</binary>
+  </provides>
+  <developer id="io.github.contr_hq">
+    <name>Contr</name>
+  </developer>
+  <url type="homepage">https://github.com/contr-hq/contr-linux</url>
+  <url type="bugtracker">https://github.com/contr-hq/contr-linux/issues</url>
+  <url type="vcs-browser">https://github.com/contr-hq/contr-linux</url>
+  <content_rating type="oars-1.1"/>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <releases>
+    <release version="0.1.0" date="2026-10-22"/>
+  </releases>
+</component>

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Contr
+GenericName=Container Manager
+Comment=Run and manage containers, Compose projects and a Kubernetes cluster
+Exec=contr-desktop
+Icon=io.github.contr_hq.Contr
+Terminal=false
+Categories=Development;
+Keywords=docker;container;compose;kubernetes;podman;image;
+StartupNotify=true
+SingleMainWindow=true
