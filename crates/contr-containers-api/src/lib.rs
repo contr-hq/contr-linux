@@ -16,3 +16,9 @@ pub struct OpenContainer {
     pub id: String,
     pub tab: ContainerTab,
 }
+
+/// Opens the Run dialog with this image reference filled in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunImage {
+    pub image: String,
+}

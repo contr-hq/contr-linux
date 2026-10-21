@@ -17,6 +17,7 @@ prost-types.workspace = true
 relm4.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["sync"] }
+tonic.workspace = true
 tracing.workspace = true
 vte4.workspace = true
 

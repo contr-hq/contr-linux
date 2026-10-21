@@ -507,6 +507,7 @@ fn rename(parent: &adw::NavigationPage, current: &str, input: &relm4::Sender<Con
     dialog.set_close_response("cancel");
     let input = input.clone();
     let current = current.to_owned();
+    let focus = entry.clone();
     dialog.connect_response(Some("rename"), move |_, _| {
         let name = entry.text().trim().to_owned();
         if !name.is_empty() && name != current {
@@ -514,4 +515,5 @@ fn rename(parent: &adw::NavigationPage, current: &str, input: &relm4::Sender<Con
         }
     });
     dialog.present(Some(parent));
+    dialog.set_focus(Some(&focus));
 }

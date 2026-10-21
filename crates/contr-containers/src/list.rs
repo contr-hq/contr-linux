@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
-use contr_containers_api::{ContainerTab, OpenContainer};
+use contr_containers_api::{ContainerTab, OpenContainer, RunImage};
 use contr_daemon_ui::{Daemon, EngineGate, Status, describe, while_running};
 use contr_sdk::api::containers::v1::{
     Container, ContainerState, ContainerStats, PruneContainersRequest, RemoveContainerRequest, RestartContainerRequest,
@@ -28,12 +28,16 @@ pub struct ContainersPage {
     query: String,
     banner: Option<(String, String)>,
     detail: Option<(String, Controller<ContainerPage>)>,
+    /// A container the Run dialog started, opened once the list shows it.
+    pending_open: Option<String>,
     home: PathBuf,
 }
 
 #[derive(Debug)]
 pub enum ContainersMsg {
     Open(OpenContainer),
+    Run(RunImage),
+    Started(String),
     Activated(String),
     Search(String),
     Start(String),
@@ -49,6 +53,15 @@ pub enum ContainersMsg {
     BannerLogs,
     DetailClosed,
     Toast(String),
+}
+
+/// What the section asks the window for.
+#[derive(Debug)]
+pub enum ContainersOutput {
+    /// Show the Containers section.
+    Show,
+    /// Show the Images section with its pull dialog.
+    PullImage,
 }
 
 #[doc(hidden)]
@@ -72,12 +85,13 @@ pub struct ContainersWidgets {
     groups: Vec<(Option<String>, GroupWidget)>,
     menu_button: gtk::MenuButton,
     search_button: gtk::ToggleButton,
+    run_button: gtk::Button,
 }
 
 impl Component for ContainersPage {
     type CommandOutput = ContainersCmd;
     type Input = ContainersMsg;
-    type Output = ();
+    type Output = ContainersOutput;
     type Init = Daemon;
     type Root = adw::ToastOverlay;
     type Widgets = ContainersWidgets;
@@ -99,9 +113,21 @@ impl Component for ContainersPage {
             .tooltip_text("View Options")
             .menu_model(&menu)
             .build();
+        let run_button = gtk::Button::builder()
+            .child(
+                &adw::ButtonContent::builder()
+                    .icon_name("list-add-symbolic")
+                    .label("Run")
+                    .build(),
+            )
+            .tooltip_text("Run a Container")
+            .build();
         let header = adw::HeaderBar::builder().title_widget(&title).build();
+        header.pack_start(&run_button);
         header.pack_end(&menu_button);
         header.pack_end(&search_button);
+        let input = sender.input_sender().clone();
+        run_button.connect_clicked(move |_| input.emit(ContainersMsg::Run(RunImage { image: String::new() })));
 
         let entry = gtk::SearchEntry::builder()
             .placeholder_text("Search containers")
@@ -128,12 +154,28 @@ impl Component for ContainersPage {
             .orientation(gtk::Orientation::Vertical)
             .spacing(28)
             .build();
+        let run_first = gtk::Button::builder()
+            .label("Run a Container")
+            .css_classes(["pill", "suggested-action"])
+            .build();
+        let pull_first = gtk::Button::builder()
+            .label("Pull an Image")
+            .css_classes(["pill"])
+            .build();
+        let empty_actions = gtk::Box::builder().spacing(12).halign(gtk::Align::Center).build();
+        empty_actions.append(&run_first);
+        empty_actions.append(&pull_first);
         let empty = adw::StatusPage::builder()
             .icon_name("contr-containers-symbolic")
             .title("No Containers Yet")
             .description("Run one from an image, or start a project with docker compose up in a terminal. It shows up here right away.")
+            .child(&empty_actions)
             .vexpand(true)
             .build();
+        let input = sender.input_sender().clone();
+        run_first.connect_clicked(move |_| input.emit(ContainersMsg::Run(RunImage { image: String::new() })));
+        let output = sender.output_sender().clone();
+        pull_first.connect_clicked(move |_| output.emit(ContainersOutput::PullImage));
         let loading = adw::Spinner::builder()
             .width_request(32)
             .height_request(32)
@@ -187,6 +229,7 @@ impl Component for ContainersPage {
             query: String::new(),
             banner: None,
             detail: None,
+            pending_open: None,
             home: glib::home_dir(),
         };
         let widgets = ContainersWidgets {
@@ -199,6 +242,7 @@ impl Component for ContainersPage {
             groups: Vec::new(),
             menu_button,
             search_button,
+            run_button,
         };
         ComponentParts { model, widgets }
     }
@@ -212,6 +256,21 @@ impl Component for ContainersPage {
     ) {
         match message {
             ContainersMsg::Open(open) => self.open(widgets, &sender, &open.id, open.tab),
+            ContainersMsg::Run(run) => {
+                let taken = self.published_ports();
+                let input = sender.input_sender().clone();
+                crate::run::present(root, &self.daemon, &run.image, taken, move |id| {
+                    input.emit(ContainersMsg::Started(id));
+                });
+            }
+            ContainersMsg::Started(id) => {
+                let _ = sender.output(ContainersOutput::Show);
+                if self.containers.contains_key(&id) {
+                    self.open(widgets, &sender, &id, ContainerTab::Logs);
+                } else {
+                    self.pending_open = Some(id);
+                }
+            }
             ContainersMsg::Activated(id) => self.open(widgets, &sender, &id, ContainerTab::Logs),
             ContainersMsg::Terminal(id) => self.open(widgets, &sender, &id, ContainerTab::Terminal),
             ContainersMsg::Search(query) => self.query = query,
@@ -294,7 +353,12 @@ impl Component for ContainersPage {
                 {
                     detail.emit(ContainerPageMsg::Updated(container.clone()));
                 }
-                self.containers.insert(container.id.clone(), *container);
+                let id = container.id.clone();
+                self.containers.insert(id.clone(), *container);
+                if self.pending_open.as_ref() == Some(&id) {
+                    self.pending_open = None;
+                    self.open(widgets, &sender, &id, ContainerTab::Logs);
+                }
             }
             ContainersCmd::Removed(id) => {
                 self.containers.remove(&id);
@@ -325,6 +389,7 @@ impl ContainersPage {
         });
         widgets.search_button.set_sensitive(running);
         widgets.menu_button.set_sensitive(running);
+        widgets.run_button.set_sensitive(running);
         if !running {
             widgets.search.set_search_mode(false);
         }
@@ -369,6 +434,21 @@ impl ContainersPage {
             });
         widgets.nav.push(detail.widget());
         self.detail = Some((container.id, detail));
+    }
+
+    /// Host ports the containers publish, with the name of the container that holds each.
+    fn published_ports(&self) -> HashMap<u32, String> {
+        self.containers
+            .values()
+            .flat_map(|container| {
+                let name = model::title(container);
+                container
+                    .ports
+                    .iter()
+                    .filter(|port| port.host_port != 0)
+                    .map(move |port| (port.host_port, name.clone()))
+            })
+            .collect()
     }
 
     fn find(&self, id: &str) -> Option<&Container> {
