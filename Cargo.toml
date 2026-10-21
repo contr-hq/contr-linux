@@ -17,6 +17,7 @@ contr-containers-api = { path = "crates/contr-containers-api" }
 contr-daemon-ui = { path = "crates/contr-daemon-ui" }
 contr-images = { path = "crates/contr-images" }
 contr-networks = { path = "crates/contr-networks" }
+contr-troubleshoot = { path = "crates/contr-troubleshoot" }
 contr-ui-common = { path = "crates/contr-ui-common" }
 contr-volumes = { path = "crates/contr-volumes" }
 

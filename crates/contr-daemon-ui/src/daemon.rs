@@ -55,6 +55,13 @@ pub struct Status {
     pub action: Option<(EngineAction, Option<String>)>,
 }
 
+impl Default for Status {
+    /// Connecting, with nothing known yet.
+    fn default() -> Self {
+        Self::initial()
+    }
+}
+
 impl Status {
     pub(crate) fn initial() -> Self {
         Self {

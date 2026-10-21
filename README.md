@@ -7,7 +7,7 @@ GTK4 and libadwaita desktop client for [Contr](https://github.com/contr-hq/contr
 
 The application shell (window, sidebar navigation, engine card and gate, primary menu, tray icon) and the Containers
 section with each container's logs, inspection, terminal and stats, the Run dialog, Images with pulls, Volumes,
-Networks and Compose. Other pages arrive module by module.
+Networks, Compose, Troubleshoot and Preferences. Other pages arrive module by module.
 
 ## Stack
 

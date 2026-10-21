@@ -79,6 +79,15 @@ open project to its page. A project page runs `RunAction` for Up, Pull, Restart,
 output lines while it runs and its last lines in a dialog when it fails. Logs follow the project's `StreamLogs`,
 filtered by service, and restart when the set of running containers changes.
 
+## Troubleshoot
+
+`contr-troubleshoot` runs `DiagnosticsService.RunChecks` once a client exists and again whenever the connection or the
+engine state changes. Its alert leads with an unreachable daemon, then a failed engine and its `ErrorReason`, then the
+first failing check, and offers the remediations of the failing checks through `RunRemediation`. A remediation whose
+outcome needs a new login offers to log out through `org.gnome.SessionManager`. Logs come from `journalctl -o json`:
+the daemon's user unit, falling back to the log file in the runtime directory, or the engine's unit. No RPC collects
+a diagnostics bundle, so that row stays disabled.
+
 ## Capabilities
 
 The sidebar shows Compose and Kubernetes only when the handshake advertises `CAPABILITY_COMPOSE` and
@@ -100,3 +109,9 @@ Closing the window hides it while "keep running" is on (the default, in `$XDG_CO
 launching the application again presents it. The tray is a `StatusNotifierItem` from ksni; GNOME shows it only with
 the AppIndicator extension, which Ubuntu enables. Its icon is sent as pixmaps, since the shell cannot read this
 process's resources.
+
+"Start Contr when I log in" writes an XDG autostart entry that passes `--background`, which skips presenting the
+window once. Notifications go through `GApplication`: a container that exits with a non-zero code, with buttons that
+open its logs or restart it, and finished pulls and Compose runs. Preferences edits the daemon's settings through
+`UpdateSettings` with a field mask; settings the administrator locked show as managed, and engine configuration
+needs `CAPABILITY_ENGINE_CONFIGURATION`.
