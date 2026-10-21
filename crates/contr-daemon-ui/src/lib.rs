@@ -1,10 +1,12 @@
 //! The client's single connection to the daemon: connecting, or starting the daemon when nothing answers, following
 //! the engine state, and the engine gate pages show while the engine is not running.
 
+mod attachments;
 mod daemon;
 mod gate;
 mod settings;
 
+pub use attachments::{Attachment, engine_kind, engine_name, follow_attachments};
 pub use daemon::{Daemon, EngineAction, Link, Status, while_running};
 pub use gate::{EngineGate, TROUBLESHOOT_ACTION};
 pub use settings::{SettingsHandle, field_mask};

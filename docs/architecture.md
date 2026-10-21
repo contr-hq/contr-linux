@@ -65,6 +65,13 @@ The Run dialog belongs to the containers module and is reached from other module
 image to offer the ports it exposes, picks host ports that no container publishes and `CheckHostPorts` reports free,
 publishes them on 127.0.0.1, and calls `CreateContainer` with `start`, pulling first when the image is not local.
 
+## Volumes and networks
+
+Which container mounts a volume or joins a network is known only from `InspectContainer`, so
+`contr_daemon_ui::follow_attachments` follows `WatchContainers` and inspects each container that appears or changes.
+Volumes and Networks combine it with `WatchVolumes` and `WatchNetworks`. The API reports no volume sizes, so the pages
+show none. Networks has no "Connect a container…" action, since no RPC connects one.
+
 ## Capabilities
 
 The sidebar shows Compose and Kubernetes only when the handshake advertises `CAPABILITY_COMPOSE` and

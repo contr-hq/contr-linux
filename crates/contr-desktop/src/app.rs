@@ -5,18 +5,20 @@ use std::rc::Rc;
 use contr_containers::{ContainersMsg, ContainersOutput, ContainersPage};
 use contr_containers_api::{ContainerTab, OpenContainer, RunImage};
 use contr_core::product;
-use contr_daemon_ui::{Daemon, EngineAction, Status, TROUBLESHOOT_ACTION, while_running};
+use contr_daemon_ui::{Daemon, EngineAction, Status, TROUBLESHOOT_ACTION, engine_name, while_running};
 use contr_images::{ImagesMsg, ImagesOutput, ImagesPage};
+use contr_networks::{NetworksOutput, NetworksPage};
 use contr_sdk::ClientIdentity;
 use contr_sdk::api::containers::v1::{Container, ContainerState, WatchContainersRequest, watch_containers_response};
 use contr_sdk::api::daemon::v1::Capability;
 use contr_sdk::api::engine::v1::EngineState;
+use contr_volumes::{VolumesOutput, VolumesPage};
 use relm4::adw::{self, prelude::*};
 use relm4::gtk::{self, gio, glib};
 use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 
 use crate::client_settings::ClientSettings;
-use crate::engine_card::{EngineCard, engine_name};
+use crate::engine_card::EngineCard;
 use crate::sections::{self, Section};
 use crate::tray::{self, ContrTray, RunningContainer, TrayState};
 
@@ -29,6 +31,10 @@ pub(crate) struct App {
     tray_state: TrayState,
     containers_page: Controller<ContainersPage>,
     images_page: Controller<ImagesPage>,
+    /// Held only to keep the page running; dropping a controller shuts its component down.
+    _volumes_page: Controller<VolumesPage>,
+    /// Held only to keep the page running.
+    _networks_page: Controller<NetworksPage>,
 }
 
 #[derive(Debug)]
@@ -143,10 +149,22 @@ impl Component for App {
                 ImagesOutput::OpenContainer(open) => AppMsg::Open(open),
                 ImagesOutput::Run(run) => AppMsg::Run(run),
             });
+        let volumes_page = VolumesPage::builder()
+            .launch(daemon.clone())
+            .forward(sender.input_sender(), |output| match output {
+                VolumesOutput::OpenContainer(open) => AppMsg::Open(open),
+            });
+        let networks_page = NetworksPage::builder()
+            .launch(daemon.clone())
+            .forward(sender.input_sender(), |output| match output {
+                NetworksOutput::OpenContainer(open) => AppMsg::Open(open),
+            });
         for section in Section::ALL {
             match section {
                 Section::Containers => stack.add_named(containers_page.widget(), Some(section.name())),
                 Section::Images => stack.add_named(images_page.widget(), Some(section.name())),
+                Section::Volumes => stack.add_named(volumes_page.widget(), Some(section.name())),
+                Section::Networks => stack.add_named(networks_page.widget(), Some(section.name())),
                 _ => stack.add_named(&sections::placeholder(section, &daemon), Some(section.name())),
             };
         }
@@ -197,6 +215,8 @@ impl Component for App {
             tray_state: TrayState::default(),
             containers_page,
             images_page,
+            _volumes_page: volumes_page,
+            _networks_page: networks_page,
         };
         if let Some(first) = rows.get(&Section::Containers) {
             list.select_row(Some(&first.row));

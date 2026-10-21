@@ -1,8 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use contr_daemon_ui::{EngineAction, Link, Status};
+use contr_daemon_ui::{EngineAction, Link, Status, engine_name};
 use contr_sdk::api::common::v1::ErrorReason;
-use contr_sdk::api::daemon::v1::EngineInfo;
 use contr_sdk::api::engine::v1::EngineState;
 use relm4::adw;
 use relm4::gtk::{self, glib, prelude::*};
@@ -95,21 +94,6 @@ impl EngineCard {
     }
 }
 
-/// The engine's product name and major version, such as `System Docker 28`.
-pub(crate) fn engine_name(info: &EngineInfo) -> String {
-    let kind = if info.endpoint.contains("podman") {
-        "Podman"
-    } else if info.rootless {
-        "Rootless Docker"
-    } else {
-        "System Docker"
-    };
-    match info.version.split('.').next().filter(|major| !major.is_empty()) {
-        Some(major) => format!("{kind} {major}"),
-        None => kind.to_owned(),
-    }
-}
-
 pub(crate) fn describe(status: &Status) -> CardText {
     let card = |kind, title, subtitle: String| CardText { kind, title, subtitle };
 
@@ -175,34 +159,4 @@ fn clock(at: SystemTime) -> String {
         .and_then(|time| time.format("%H:%M"))
         .map(String::from)
         .unwrap_or_default()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn info(endpoint: &str, rootless: bool) -> EngineInfo {
-        EngineInfo {
-            endpoint: endpoint.to_owned(),
-            version: "28.5.1".to_owned(),
-            rootless,
-            ..EngineInfo::default()
-        }
-    }
-
-    #[test]
-    fn names_the_engine_kind_and_major_version() {
-        assert_eq!(
-            engine_name(&info("unix:///var/run/docker.sock", false)),
-            "System Docker 28"
-        );
-        assert_eq!(
-            engine_name(&info("unix:///run/user/1000/docker.sock", true)),
-            "Rootless Docker 28"
-        );
-        assert_eq!(
-            engine_name(&info("unix:///run/user/1000/podman/podman.sock", true)),
-            "Podman 28"
-        );
-    }
 }
