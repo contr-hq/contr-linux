@@ -244,6 +244,19 @@ progressbar.success > trough > progress {
   font-style: italic;
 }
 
+.sidebar-dot-off {
+  min-width: 8px;
+  min-height: 8px;
+  border-radius: 4px;
+  background-color: alpha(currentColor, .25);
+}
+
+.code-block {
+  background-color: alpha(currentColor, .06);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
 @media (prefers-color-scheme: dark) {
   .console {
     box-shadow: 0 0 0 1px alpha(white, .08);

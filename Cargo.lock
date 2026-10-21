@@ -206,8 +206,10 @@ dependencies = [
  "contr-core",
  "contr-daemon-ui",
  "contr-images",
+ "contr-networks",
  "contr-sdk",
  "contr-ui-common",
+ "contr-volumes",
  "ksni",
  "relm4",
  "serde",
@@ -227,6 +229,17 @@ dependencies = [
  "contr-ui-common",
  "relm4",
  "tokio",
+]
+
+[[package]]
+name = "contr-networks"
+version = "0.1.0"
+dependencies = [
+ "contr-containers-api",
+ "contr-daemon-ui",
+ "contr-sdk",
+ "contr-ui-common",
+ "relm4",
 ]
 
 [[package]]
@@ -274,6 +287,17 @@ version = "0.1.0"
 dependencies = [
  "contr-core",
  "glib-build-tools",
+ "relm4",
+]
+
+[[package]]
+name = "contr-volumes"
+version = "0.1.0"
+dependencies = [
+ "contr-containers-api",
+ "contr-daemon-ui",
+ "contr-sdk",
+ "contr-ui-common",
  "relm4",
 ]
 
