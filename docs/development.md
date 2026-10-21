@@ -55,6 +55,21 @@ cargo xtask package-linux --deb-binary PATH --rpm-binary PATH --version 0.1.0
 nfpm runs in `packaging/linux/package.Dockerfile` through `docker buildx`, which must be Docker Engine's plugin, not
 Docker Desktop's; the packages land in `target/dist`.
 
+## Flatpak (beta)
+
+`packaging/flatpak/io.github.contr_hq.Contr.yml` builds the client on the GNOME 50 runtime; `.github/workflows/flatpak.yml`
+uploads the bundle. Nothing of the daemon runs in the sandbox: the app reaches the host's contrd through
+`$XDG_RUNTIME_DIR/contr` (`--filesystem=xdg-run/contr`), where the `contr-daemon` package's `contrd.socket` starts it
+on the first connection. The build fetches crates and the `contr-sdk` git dependency over the network, which Flathub
+does not allow; a Flathub build needs vendored sources.
+
+In the sandbox the client:
+
+- hides "Start Contr when I log in", since the autostart directory it sees is private to the sandbox;
+- shows the tray under the bus's unique name, since it may not own a `StatusNotifierItem-PID-ID` name;
+- reads the daemon's log from its file in the runtime directory, since `journalctl` is not in the sandbox;
+- cannot switch the Docker CLI context or open the kubeconfig file, which live outside the sandbox.
+
 ## Checks before every push
 
 ```sh
