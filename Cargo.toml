@@ -16,14 +16,15 @@ contr-containers = { path = "crates/contr-containers" }
 contr-containers-api = { path = "crates/contr-containers-api" }
 contr-daemon-ui = { path = "crates/contr-daemon-ui" }
 contr-images = { path = "crates/contr-images" }
+contr-kubernetes = { path = "crates/contr-kubernetes" }
 contr-networks = { path = "crates/contr-networks" }
 contr-onboarding = { path = "crates/contr-onboarding" }
 contr-troubleshoot = { path = "crates/contr-troubleshoot" }
 contr-ui-common = { path = "crates/contr-ui-common" }
 contr-volumes = { path = "crates/contr-volumes" }
 
-contr-core = { git = "https://github.com/contr-hq/contr", rev = "608f962313ab7638e5d0d5d8d1d7a4182070ae29" }
-contr-sdk = { git = "https://github.com/contr-hq/contr", rev = "608f962313ab7638e5d0d5d8d1d7a4182070ae29" }
+contr-core = { git = "https://github.com/contr-hq/contr", rev = "a0eac5c6e1edecb6380b6e3727981eacecc84d5c" }
+contr-sdk = { git = "https://github.com/contr-hq/contr", rev = "a0eac5c6e1edecb6380b6e3727981eacecc84d5c" }
 
 anyhow = "1.0.104"
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }

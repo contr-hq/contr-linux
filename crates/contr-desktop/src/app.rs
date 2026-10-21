@@ -8,6 +8,7 @@ use contr_containers_api::{ContainerTab, OpenContainer, RunImage};
 use contr_core::product;
 use contr_daemon_ui::{Daemon, EngineAction, Status, TROUBLESHOOT_ACTION, engine_name, while_running};
 use contr_images::{ImagesMsg, ImagesOutput, ImagesPage};
+use contr_kubernetes::{KubernetesOutput, KubernetesPage};
 use contr_networks::{NetworksOutput, NetworksPage};
 use contr_onboarding::{OnboardingOutput, OnboardingPage};
 use contr_sdk::ClientIdentity;
@@ -16,6 +17,7 @@ use contr_sdk::api::containers::v1::{
 };
 use contr_sdk::api::daemon::v1::Capability;
 use contr_sdk::api::engine::v1::EngineState;
+use contr_sdk::api::kubernetes::v1::ClusterState;
 use contr_troubleshoot::{TroubleshootOutput, TroubleshootPage};
 use contr_volumes::{VolumesOutput, VolumesPage};
 use relm4::adw::{self, prelude::*};
@@ -25,7 +27,7 @@ use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Con
 use crate::client_settings::ClientSettings;
 use crate::engine_card::EngineCard;
 use crate::preferences::{self, PreferencesContext};
-use crate::sections::{self, Section};
+use crate::sections::Section;
 use crate::tray::{self, ContrTray, RunningContainer, TrayState};
 use crate::{notifications, shortcuts};
 
@@ -54,6 +56,9 @@ pub(crate) struct App {
     _compose_page: Controller<ComposePage>,
     /// Held only to keep the page running.
     _troubleshoot_page: Controller<TroubleshootPage>,
+    /// Held only to keep the page running.
+    _kubernetes_page: Controller<KubernetesPage>,
+    cluster: ClusterState,
     /// Shown instead of the sections until the user finishes or skips setup.
     onboarding: Option<Controller<OnboardingPage>>,
 }
@@ -70,6 +75,8 @@ pub(crate) enum AppMsg {
     RestartContainer(String),
     Problems(usize),
     Finished(String),
+    Cluster(ClusterState),
+    ClusterReady,
     Onboarded,
     Preferences,
     Shortcuts,
@@ -112,6 +119,8 @@ pub(crate) struct AppWidgets {
 struct SidebarRow {
     row: gtk::ListBoxRow,
     count: gtk::Label,
+    dot: gtk::Box,
+    busy: adw::Spinner,
 }
 
 impl Component for App {
@@ -200,6 +209,13 @@ impl Component for App {
                 .forward(sender.input_sender(), |output| match output {
                     TroubleshootOutput::Problems(count) => AppMsg::Problems(count),
                 });
+        let kubernetes_page =
+            KubernetesPage::builder()
+                .launch(daemon.clone())
+                .forward(sender.input_sender(), |output| match output {
+                    KubernetesOutput::State(state) => AppMsg::Cluster(state),
+                    KubernetesOutput::Ready => AppMsg::ClusterReady,
+                });
         for section in Section::ALL {
             match section {
                 Section::Troubleshoot => stack.add_named(troubleshoot_page.widget(), Some(section.name())),
@@ -208,7 +224,7 @@ impl Component for App {
                 Section::Images => stack.add_named(images_page.widget(), Some(section.name())),
                 Section::Volumes => stack.add_named(volumes_page.widget(), Some(section.name())),
                 Section::Networks => stack.add_named(networks_page.widget(), Some(section.name())),
-                Section::Kubernetes => stack.add_named(&sections::placeholder(section, &daemon), Some(section.name())),
+                Section::Kubernetes => stack.add_named(kubernetes_page.widget(), Some(section.name())),
             };
         }
         let toasts = adw::ToastOverlay::new();
@@ -281,6 +297,8 @@ impl Component for App {
             _networks_page: networks_page,
             _compose_page: compose_page,
             _troubleshoot_page: troubleshoot_page,
+            _kubernetes_page: kubernetes_page,
+            cluster: ClusterState::Unspecified,
             onboarding,
         };
         if let Some(first) = rows.get(&Section::Containers) {
@@ -344,6 +362,12 @@ impl Component for App {
                 });
             }
             AppMsg::Problems(count) => self.problems = count,
+            AppMsg::Cluster(state) => self.cluster = state,
+            AppMsg::ClusterReady => {
+                if !root.is_active() {
+                    notifications::finished("Kubernetes is ready");
+                }
+            }
             AppMsg::Onboarded => {
                 self.settings.borrow_mut().onboarded = true;
                 if let Err(error) = self.settings.borrow().save() {
@@ -429,6 +453,13 @@ impl Component for App {
             row.count.set_label(&self.problems.to_string());
             row.count.set_visible(self.problems > 0);
             row.count.add_css_class("sidebar-badge");
+        }
+        if let Some(row) = widgets.rows.get(&Section::Kubernetes) {
+            let busy = matches!(self.cluster, ClusterState::Starting | ClusterState::Stopping);
+            let ready = self.cluster == ClusterState::Ready;
+            row.busy.set_visible(busy);
+            row.dot.set_visible(ready);
+            row.dot.set_tooltip_text(ready.then_some("Cluster ready"));
         }
         for (section, capability) in [
             (Section::Compose, Capability::Compose),
@@ -530,13 +561,21 @@ fn sidebar(sender: &ComponentSender<App>) -> (gtk::ListBox, HashMap<Section, Sid
             .valign(gtk::Align::Center)
             .visible(false)
             .build();
+        let dot = gtk::Box::builder()
+            .valign(gtk::Align::Center)
+            .css_classes(["sidebar-dot"])
+            .visible(false)
+            .build();
+        let busy = adw::Spinner::builder().visible(false).build();
         let content = gtk::Box::builder().spacing(12).build();
         content.append(&icon);
         content.append(&label);
         content.append(&count);
+        content.append(&dot);
+        content.append(&busy);
         let row = gtk::ListBoxRow::builder().child(&content).name(section.name()).build();
         list.append(&row);
-        rows.insert(section, SidebarRow { row, count });
+        rows.insert(section, SidebarRow { row, count, dot, busy });
     }
     list.set_header_func(|row, _| {
         let header = (row.widget_name() == Section::Troubleshoot.name()).then(|| {

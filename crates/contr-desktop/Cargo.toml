@@ -16,6 +16,7 @@ contr-containers-api.workspace = true
 contr-core.workspace = true
 contr-daemon-ui.workspace = true
 contr-images.workspace = true
+contr-kubernetes.workspace = true
 contr-networks.workspace = true
 contr-onboarding.workspace = true
 contr-troubleshoot.workspace = true

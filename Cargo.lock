@@ -144,7 +144,7 @@ checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 [[package]]
 name = "contr-api"
 version = "0.1.0"
-source = "git+https://github.com/contr-hq/contr?rev=608f962313ab7638e5d0d5d8d1d7a4182070ae29#608f962313ab7638e5d0d5d8d1d7a4182070ae29"
+source = "git+https://github.com/contr-hq/contr?rev=a0eac5c6e1edecb6380b6e3727981eacecc84d5c#a0eac5c6e1edecb6380b6e3727981eacecc84d5c"
 dependencies = [
  "prost",
  "prost-types",
@@ -188,7 +188,7 @@ version = "0.1.0"
 [[package]]
 name = "contr-core"
 version = "0.1.0"
-source = "git+https://github.com/contr-hq/contr?rev=608f962313ab7638e5d0d5d8d1d7a4182070ae29#608f962313ab7638e5d0d5d8d1d7a4182070ae29"
+source = "git+https://github.com/contr-hq/contr?rev=a0eac5c6e1edecb6380b6e3727981eacecc84d5c#a0eac5c6e1edecb6380b6e3727981eacecc84d5c"
 dependencies = [
  "serde",
  "serde_json",
@@ -219,6 +219,7 @@ dependencies = [
  "contr-core",
  "contr-daemon-ui",
  "contr-images",
+ "contr-kubernetes",
  "contr-networks",
  "contr-onboarding",
  "contr-sdk",
@@ -248,6 +249,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "contr-kubernetes"
+version = "0.1.0"
+dependencies = [
+ "contr-daemon-ui",
+ "contr-sdk",
+ "contr-ui-common",
+ "prost-types",
+ "relm4",
+ "tokio",
+]
+
+[[package]]
 name = "contr-networks"
 version = "0.1.0"
 dependencies = [
@@ -272,7 +285,7 @@ dependencies = [
 [[package]]
 name = "contr-sdk"
 version = "0.1.0"
-source = "git+https://github.com/contr-hq/contr?rev=608f962313ab7638e5d0d5d8d1d7a4182070ae29#608f962313ab7638e5d0d5d8d1d7a4182070ae29"
+source = "git+https://github.com/contr-hq/contr?rev=a0eac5c6e1edecb6380b6e3727981eacecc84d5c#a0eac5c6e1edecb6380b6e3727981eacecc84d5c"
 dependencies = [
  "contr-api",
  "contr-core",
@@ -291,7 +304,7 @@ dependencies = [
 [[package]]
 name = "contr-transport"
 version = "0.1.0"
-source = "git+https://github.com/contr-hq/contr?rev=608f962313ab7638e5d0d5d8d1d7a4182070ae29#608f962313ab7638e5d0d5d8d1d7a4182070ae29"
+source = "git+https://github.com/contr-hq/contr?rev=a0eac5c6e1edecb6380b6e3727981eacecc84d5c#a0eac5c6e1edecb6380b6e3727981eacecc84d5c"
 dependencies = [
  "contr-core",
  "futures-util",
