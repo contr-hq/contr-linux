@@ -1,0 +1,33 @@
+name: flatpak
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - .github/workflows/flatpak.yml
+      - packaging/flatpak/**
+      - packaging/linux/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flatpak-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    container:
+      # The image carries flatpak-builder and the GNOME 50 runtime the manifest names.
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50@sha256:1de59efef01a946d9f28f1ec3458bf6f61dcee3507d7fecdd473f8134da4ec77
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v7
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: contr.flatpak
+          manifest-path: packaging/flatpak/io.github.contr_hq.Contr.yml
+          cache-key: flatpak-builder-${{ github.sha }}

@@ -1,0 +1,40 @@
+# Beta Flatpak of the desktop client. It talks to the contrd the contr-daemon package installs on the host, through
+# the socket that package's contrd.socket listens on; nothing of the daemon runs in the sandbox.
+id: io.github.contr_hq.Contr
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: contr-desktop
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # $XDG_RUNTIME_DIR/contr holds contrd.sock; systemd starts contrd on the first connection.
+  - --filesystem=xdg-run/contr
+  # The tray icon.
+  - --talk-name=org.kde.StatusNotifierWatcher
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/contr/cargo
+modules:
+  - name: contr
+    buildsystem: simple
+    build-options:
+      # A beta build fetches crates and the contr-sdk git dependency while building.
+      build-args:
+        - --share=network
+    build-commands:
+      - cargo build --release --locked --package contr-desktop
+      - install -Dm755 target/release/contr-desktop /app/bin/contr-desktop
+      - install -Dm644 packaging/linux/io.github.contr_hq.Contr.desktop /app/share/applications/io.github.contr_hq.Contr.desktop
+      - install -Dm644 packaging/linux/io.github.contr_hq.Contr.metainfo.xml /app/share/metainfo/io.github.contr_hq.Contr.metainfo.xml
+      - install -Dm644 crates/contr-ui-common/data/icons/scalable/apps/app.svg /app/share/icons/hicolor/scalable/apps/io.github.contr_hq.Contr.svg
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - target
