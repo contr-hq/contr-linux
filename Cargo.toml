@@ -23,8 +23,8 @@ contr-troubleshoot = { path = "crates/contr-troubleshoot" }
 contr-ui-common = { path = "crates/contr-ui-common" }
 contr-volumes = { path = "crates/contr-volumes" }
 
-contr-core = { git = "https://github.com/contr-hq/contr", rev = "7c9937719542ff1826395815159d6b0f163a943a" }
-contr-sdk = { git = "https://github.com/contr-hq/contr", rev = "7c9937719542ff1826395815159d6b0f163a943a" }
+contr-core = { git = "https://github.com/contr-hq/contr", rev = "50aeaccb39794d1b9116869fbb3ebd7bf0b18ed3" }
+contr-sdk = { git = "https://github.com/contr-hq/contr", rev = "50aeaccb39794d1b9116869fbb3ebd7bf0b18ed3" }
 
 anyhow = "1.0.104"
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
