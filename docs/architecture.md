@@ -59,7 +59,10 @@ shell's stdin on disconnect, since the engine keeps an exec running after its cl
 
 `contr-images` follows `WatchImages`, and `WatchContainers` to name the containers that use each image. Images that no
 container uses, untagged ones included, can be removed together with `PruneImages`. A pull streams `PullImage` into a
-card with the overall bytes and estimate and a line per layer; cancelling drops the call, which cancels the pull.
+card with the overall bytes and estimate and a line per layer; cancelling drops the call, which cancels the pull. Tag…
+calls `TagImage`, and Push streams `PushImage` into a card with the engine's latest status line, since a push reports no
+per-layer progress; a registry that refuses the push names the `docker login` to run, because pulls and pushes use the
+credentials the Docker CLI stores.
 
 The Run dialog belongs to the containers module and is reached from other modules through `RunImage`. It inspects the
 image to offer the ports it exposes, picks host ports that no container publishes and `CheckHostPorts` reports free,
@@ -70,7 +73,8 @@ publishes them on 127.0.0.1, and calls `CreateContainer` with `start`, pulling f
 Which container mounts a volume or joins a network is known only from `InspectContainer`, so
 `contr_daemon_ui::follow_attachments` follows `WatchContainers` and inspects each container that appears or changes.
 Volumes and Networks combine it with `WatchVolumes` and `WatchNetworks`. The API reports no volume sizes, so the pages
-show none. Networks has no "Connect a container…" action, since no RPC connects one.
+show none. A user network connects any container not on it yet through `ConnectNetwork`, with optional aliases, and each
+member disconnects through `DisconnectNetwork`.
 
 ## Compose
 
