@@ -795,13 +795,14 @@ fn log_out(root: &adw::ToastOverlay) {
     });
 }
 
-/// Streams the daemon's bundle into `path` through a `.part` file, so a bundle that fails midway leaves no zip.
+/// Streams the daemon's bundle into a temporary file, then copies it to `path`, so a bundle that fails midway leaves
+/// no zip there. A sandboxed client may write only `path` itself, so the temporary file is not beside it.
 async fn write_bundle(client: Client, path: &Path, progress: impl Fn(String)) -> Result<(), String> {
-    let part = path.with_extension("zip.part");
-    let mut file = tokio::fs::File::create(&part)
-        .await
-        .map_err(|error| error.to_string())?;
+    let temporary = std::env::temp_dir().join(format!("{}-diagnostics-{}.zip.part", product::SLUG, std::process::id()));
     let result = async {
+        let mut file = tokio::fs::File::create(&temporary)
+            .await
+            .map_err(|error| error.to_string())?;
         let rpc = |status: tonic::Status| describe(&Error::from(status));
         let mut stream = client
             .diagnostics()
@@ -819,12 +820,14 @@ async fn write_bundle(client: Client, path: &Path, progress: impl Fn(String)) ->
             }
         }
         file.flush().await.map_err(|error| error.to_string())?;
-        tokio::fs::rename(&part, path).await.map_err(|error| error.to_string())
+        if let Err(error) = tokio::fs::copy(&temporary, path).await {
+            let _ = tokio::fs::remove_file(path).await;
+            return Err(error.to_string());
+        }
+        Ok(())
     }
     .await;
-    if result.is_err() {
-        let _ = tokio::fs::remove_file(&part).await;
-    }
+    let _ = tokio::fs::remove_file(&temporary).await;
     result
 }
 
