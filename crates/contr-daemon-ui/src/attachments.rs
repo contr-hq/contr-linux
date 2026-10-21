@@ -53,6 +53,20 @@ pub async fn follow_attachments(client: Client, emit: impl Fn(Vec<Attachment>)) 
     }
 }
 
+/// The networks container `id` is on now. `WatchContainers` reports no change when a container joins or leaves a
+/// network, so pages that connect or disconnect one read it again here.
+pub async fn container_networks(client: &Client, id: &str) -> Option<Vec<NetworkAttachment>> {
+    let request = InspectContainerRequest { id: id.to_owned() };
+    let details = client
+        .containers()
+        .inspect_container(request)
+        .await
+        .ok()?
+        .into_inner()
+        .details?;
+    Some(details.networks)
+}
+
 async fn inspect(client: &Client, container: &Container) -> Option<Attachment> {
     let request = InspectContainerRequest {
         id: container.id.clone(),
