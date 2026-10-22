@@ -7,9 +7,6 @@ use contr_sdk::api::containers::v1::{Container, ContainerState};
 use contr_ui_common::format;
 use contr_ui_common::widgets::StatusKind;
 
-/// Colours of service names in the logs, in service order; they repeat after the last.
-pub(crate) const SERVICE_COLORS: [&str; 6] = ["#8ff0a4", "#f9f06b", "#99c1f1", "#f66151", "#dc8add", "#ffbe6f"];
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProjectView {
     pub(crate) name: String,

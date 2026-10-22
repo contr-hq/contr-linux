@@ -7,6 +7,7 @@ use std::time::SystemTime;
 use contr_daemon_ui::{describe, system_time};
 use contr_sdk::Client;
 use contr_sdk::api::containers::v1::{Container, ContainerState, LogStream, StreamLogsRequest};
+use contr_ui_common::palette;
 use relm4::adw::{self, prelude::*};
 use relm4::gtk::{self, gio, glib};
 use tokio::sync::mpsc;
@@ -81,10 +82,19 @@ impl LogsView {
         toolbar.append(&save);
 
         let buffer = gtk::TextBuffer::new(None);
-        buffer.create_tag(Some("time"), &[("foreground", &"#9a9996")]);
-        buffer.create_tag(Some("note"), &[("foreground", &"#9a9996")]);
-        buffer.create_tag(Some("match"), &[("background", &"#f6d32d"), ("foreground", &"#1e1e1e")]);
-        buffer.create_tag(Some("match-line"), &[("paragraph-background", &"#4a1f22")]);
+        buffer.create_tag(Some("time"), &[("foreground", &palette::CONSOLE_DIM)]);
+        buffer.create_tag(Some("note"), &[("foreground", &palette::CONSOLE_DIM)]);
+        buffer.create_tag(
+            Some("match"),
+            &[
+                ("background", &palette::MATCH_BACKGROUND),
+                ("foreground", &palette::MATCH_FOREGROUND),
+            ],
+        );
+        buffer.create_tag(
+            Some("match-line"),
+            &[("paragraph-background", &palette::MATCH_LINE_BACKGROUND)],
+        );
         let view = gtk::TextView::builder()
             .buffer(&buffer)
             .editable(false)

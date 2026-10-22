@@ -9,8 +9,8 @@ use contr_daemon_ui::{describe, system_time};
 use contr_sdk::Client;
 use contr_sdk::api::containers::v1::{ContainerStats, StreamStatsRequest};
 use contr_sdk::api::engine::v1::StreamUsageRequest;
-use contr_ui_common::format;
 use contr_ui_common::sparkline::{Series, Sparkline, Stroke};
+use contr_ui_common::{format, palette};
 use relm4::adw::{self, prelude::*};
 use relm4::gtk::{self, gdk, glib};
 use tokio::sync::mpsc;
@@ -254,9 +254,7 @@ impl StatsView {
 
     fn render(&self) {
         let state = self.0.state.borrow();
-        let accent = adw::StyleManager::default().accent_color_rgba();
-        let sent_color = gdk::RGBA::new(0.569, 0.255, 0.675, 1.0);
-        let limit_color = gdk::RGBA::new(0.878, 0.106, 0.141, 1.0);
+        let colors = palette::chart(adw::StyleManager::default().is_dark());
         let latest = state.samples.back().copied().unwrap_or_default();
         let series = |values: Vec<f64>, color: gdk::RGBA, stroke: Stroke| Series { values, color, stroke };
 
@@ -269,7 +267,7 @@ impl StatsView {
         self.0.cpu.chart.set(
             vec![series(
                 state.samples.iter().map(|sample| sample.cpu).collect(),
-                accent,
+                colors.primary,
                 Stroke::Filled,
             )],
             None,
@@ -289,10 +287,10 @@ impl StatsView {
         self.0.memory.chart.set(
             vec![series(
                 state.samples.iter().map(|sample| sample.memory as f64).collect(),
-                accent,
+                colors.primary,
                 Stroke::Filled,
             )],
-            (latest.limit > 0).then_some((latest.limit as f64, limit_color)),
+            (latest.limit > 0).then_some((latest.limit as f64, colors.limit)),
         );
 
         self.0.network.value.set_label(&format!(
@@ -304,12 +302,12 @@ impl StatsView {
             vec![
                 series(
                     state.samples.iter().map(|sample| sample.received).collect(),
-                    accent,
+                    colors.primary,
                     Stroke::Filled,
                 ),
                 series(
                     state.samples.iter().map(|sample| sample.sent).collect(),
-                    sent_color,
+                    colors.secondary,
                     Stroke::Dashed,
                 ),
             ],
@@ -325,12 +323,12 @@ impl StatsView {
             vec![
                 series(
                     state.samples.iter().map(|sample| sample.read).collect(),
-                    accent,
+                    colors.primary,
                     Stroke::Filled,
                 ),
                 series(
                     state.samples.iter().map(|sample| sample.written).collect(),
-                    sent_color,
+                    colors.secondary,
                     Stroke::Dashed,
                 ),
             ],

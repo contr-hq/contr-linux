@@ -11,13 +11,14 @@ use contr_sdk::api::compose::v1::{
     Action, Project, RemoveProjectRequest, RunActionRequest, StreamLogsRequest, run_action_response,
 };
 use contr_sdk::api::containers::v1::ContainerState;
+use contr_ui_common::palette::SERVICE_COLORS;
 use contr_ui_common::widgets::{GroupHeader, boxed_list, set_status};
 use relm4::adw::{self, prelude::*};
 use relm4::gtk::{self, gio, glib};
 use relm4::{Component, ComponentParts, ComponentSender};
 use tokio::sync::mpsc;
 
-use crate::model::{self, SERVICE_COLORS, ServiceView};
+use crate::model::{self, ServiceView};
 
 const TAIL_LINES: u32 = 200;
 /// Lines the failure dialog shows from the end of Compose's output.

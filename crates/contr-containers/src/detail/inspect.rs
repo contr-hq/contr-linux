@@ -8,7 +8,7 @@ use contr_sdk::Client;
 use contr_sdk::api::containers::v1::{
     ContainerDetails, HealthStatus, InspectContainerRequest, InspectContainerResponse, MountKind, Protocol, RestartMode,
 };
-use contr_ui_common::format;
+use contr_ui_common::{format, palette};
 use relm4::adw::{self, prelude::*};
 use relm4::gtk::{self, glib};
 
@@ -28,7 +28,13 @@ impl InspectView {
             .spacing(24)
             .build();
         let raw = gtk::TextBuffer::new(None);
-        raw.create_tag(Some("found"), &[("background", &"#f6d32d"), ("foreground", &"#1e1e1e")]);
+        raw.create_tag(
+            Some("found"),
+            &[
+                ("background", &palette::MATCH_BACKGROUND),
+                ("foreground", &palette::MATCH_FOREGROUND),
+            ],
+        );
         let raw_view = gtk::TextView::builder()
             .buffer(&raw)
             .editable(false)

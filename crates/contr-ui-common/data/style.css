@@ -1,4 +1,38 @@
-/* Loaded by AdwApplication from the resource base path; dark overrides sit in the media query at the end. */
+/* Loaded by AdwApplication from the resource base path; dark and high-contrast overrides sit at the end. */
+
+/* Contr's palette replaces the system accent; src/palette.rs repeats the colours that code draws. */
+:root {
+  --accent-bg-color: #466880;
+  --accent-fg-color: #ffffff;
+  --destructive-bg-color: #ab413e;
+  --success-bg-color: #397852;
+  --warning-bg-color: #c79d53;
+  --error-bg-color: #ab413e;
+  --window-bg-color: #eef0f3;
+  --view-bg-color: #f7f9fa;
+  --headerbar-bg-color: #f7f9fa;
+  --headerbar-backdrop-color: #eef0f3;
+  --sidebar-bg-color: #e3e7eb;
+  --sidebar-backdrop-color: #e8ebef;
+  --secondary-sidebar-bg-color: #e8ebef;
+  --secondary-sidebar-backdrop-color: #eceff2;
+  --card-bg-color: #f7f9fa;
+  --dialog-bg-color: #eef0f3;
+  --popover-bg-color: #f7f9fa;
+  --thumbnail-bg-color: #f7f9fa;
+  --overview-bg-color: #eaedf0;
+  /* Dimmed text needs 72 % on these surfaces for 4.5:1. */
+  --dim-opacity: 72%;
+}
+
+/* libadwaita mixes the focus ring at 50 %, which drops under 3:1 on the light surfaces. */
+*:focus-visible,
+entry:focus-within,
+spinbutton:focus-within,
+row.entry.focused,
+row.spin.focused {
+  outline-color: var(--accent-color);
+}
 
 .sidebar-list {
   padding: 6px;
@@ -7,7 +41,7 @@
 .sidebar-count {
   font-size: 13px;
   font-feature-settings: "tnum";
-  color: var(--dim-label-color, alpha(currentColor, .55));
+  color: color-mix(in srgb, currentColor var(--dim-opacity), transparent);
 }
 
 .sidebar-dot {
@@ -43,7 +77,7 @@
 .status-failed { color: var(--error-color); }
 .status-paused { color: var(--warning-color); }
 .status-stopped,
-.status-created { color: var(--dim-label-color, alpha(currentColor, .55)); }
+.status-created { color: color-mix(in srgb, currentColor var(--dim-opacity), transparent); }
 
 .row-subtitle-error { color: var(--error-color); }
 
@@ -74,14 +108,14 @@ banner.error > revealer > widget {
 }
 
 .console {
-  background-color: #1e1e1e;
-  color: #deddda;
+  background-color: #161a1e;
+  color: #d8dbdf;
   border-radius: 12px;
   box-shadow: 0 0 0 1px alpha(black, .08), 0 1px 3px 1px alpha(black, .07);
 }
 
 .console-toolbar {
-  background-color: #2a2a2e;
+  background-color: #21262b;
   color: alpha(white, .87);
   font-size: 13px;
   padding: 6px 6px 6px 12px;
@@ -103,7 +137,7 @@ banner.error > revealer > widget {
 .console textview,
 .console textview text {
   background-color: transparent;
-  color: #deddda;
+  color: #d8dbdf;
   font-family: "Adwaita Mono", monospace;
   font-size: 13px;
 }
@@ -252,8 +286,8 @@ banner.error > revealer > widget {
   min-height: 2px;
 }
 
-.legend-received { background-color: var(--accent-bg-color); }
-.legend-sent { background-color: #9141ac; }
+.legend-received { background-color: #466880; }
+.legend-sent { background-color: #85659c; }
 
 button.destructive-text {
   color: var(--error-color);
@@ -323,7 +357,37 @@ button.chip-toggle:checked {
 }
 
 @media (prefers-color-scheme: dark) {
+  :root {
+    --destructive-bg-color: #a03f3c;
+    --success-bg-color: #3c7753;
+    --warning-bg-color: #b9914b;
+    --error-bg-color: #a03f3c;
+    --window-bg-color: #191c20;
+    --view-bg-color: #13161a;
+    --headerbar-bg-color: #1f2328;
+    --headerbar-backdrop-color: #191c20;
+    --sidebar-bg-color: #1f2328;
+    --sidebar-backdrop-color: #1c2024;
+    --secondary-sidebar-bg-color: #1c2024;
+    --secondary-sidebar-backdrop-color: #1a1e22;
+    --card-bg-color: rgb(255 255 255 / 8%);
+    --dialog-bg-color: #262b30;
+    --popover-bg-color: #262b30;
+    --thumbnail-bg-color: #292e34;
+    --overview-bg-color: #1c2024;
+    --dim-opacity: 55%;
+  }
+
   .console {
     box-shadow: 0 0 0 1px alpha(white, .08);
+  }
+
+  .legend-received { background-color: #aed3ef; }
+  .legend-sent { background-color: #c1a3d8; }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --dim-opacity: 90%;
   }
 }

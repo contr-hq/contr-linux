@@ -6,7 +6,8 @@ use std::rc::{Rc, Weak};
 use contr_daemon_ui::describe;
 use contr_sdk::api::containers::v1::{Container, ContainerState, ExecStart, InspectContainerRequest, TerminalSize};
 use contr_sdk::{Client, ExecEvent};
-use relm4::gtk::{self, gdk, glib, pango};
+use contr_ui_common::palette;
+use relm4::gtk::{self, glib, pango};
 use tokio::sync::mpsc;
 use vte4::prelude::*;
 
@@ -99,11 +100,8 @@ impl TerminalView {
             .build();
         // "Monospace" resolves through fontconfig; Adwaita Mono is missing on some distributions.
         terminal.set_font(Some(&pango::FontDescription::from_string("Monospace 10.5")));
-        terminal.set_colors(
-            Some(&gdk::RGBA::new(0.871, 0.867, 0.855, 1.0)),
-            Some(&gdk::RGBA::new(0.118, 0.118, 0.118, 1.0)),
-            &[],
-        );
+        let console = palette::console();
+        terminal.set_colors(Some(&console.foreground), Some(&console.background), &[]);
         let root = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .css_classes(["console"])
