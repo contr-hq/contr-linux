@@ -132,6 +132,11 @@ The sidebar shows Compose and Kubernetes only when the handshake advertises `CAP
 `prefers-color-scheme` media query, and GTK finds the icons under its `icons/` directory. relm4 creates the
 application before it has an ID, so `main` sets the resource base path itself.
 
+`style.css` sets Contr's muted slate palette over libadwaita's colour variables: the accent, which replaces the
+system accent, the surfaces and the status colours, each pair of text and surface at 4.5:1 or more.
+`contr_ui_common::palette` repeats the colours that code draws, such as the Stats charts and the console, and its
+tests check them against the stylesheet.
+
 Icons are 16 px symbolic SVGs drawn with strokes, marked `foreground-stroke transparent-fill` so GTK 4.20 and later
 recolor them.
 
