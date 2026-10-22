@@ -55,6 +55,10 @@ cargo xtask package-linux --deb-binary PATH --rpm-binary PATH --version 0.1.0
 nfpm runs in `packaging/linux/package.Dockerfile` through `docker buildx`, which must be Docker Engine's plugin, not
 Docker Desktop's; the packages land in `target/dist`.
 
+A tag's release goes into the signed repositories of [contr-packages](https://github.com/contr-hq/contr-packages)
+within a day, or at once when this repository has a `PACKAGES_DISPATCH_TOKEN` secret: a fine-grained token with Contents
+read and write on `contr-packages`.
+
 ## Flatpak (beta)
 
 `packaging/flatpak/io.github.contr_hq.Contr.yml` builds the client on the GNOME 50 runtime; `.github/workflows/flatpak.yml`

@@ -18,6 +18,27 @@ Networks, Compose, Kubernetes, Troubleshoot, Preferences and first-run onboardin
 - Packages: `contr` as a .deb (Ubuntu 26.04) and .rpm (Fedora 44), depending on the daemon's `contr-daemon`
   package; see [docs/development.md](docs/development.md#packages). A beta Flatpak talks to the same host daemon.
 
+## Install
+
+The signed repositories at <https://contr-hq.github.io/contr-packages/> hold `contr` and the `contr-daemon` package it
+depends on; `stable` has releases, `testing` prereleases too.
+
+Ubuntu:
+
+```sh
+sudo curl -fsSo /usr/share/keyrings/contr.gpg https://contr-hq.github.io/contr-packages/contr.gpg
+echo "deb [signed-by=/usr/share/keyrings/contr.gpg] https://contr-hq.github.io/contr-packages/apt stable main" |
+  sudo tee /etc/apt/sources.list.d/contr.list
+sudo apt update && sudo apt install contr
+```
+
+Fedora:
+
+```sh
+sudo curl -fsSo /etc/yum.repos.d/contr-stable.repo https://contr-hq.github.io/contr-packages/rpm/contr-stable.repo
+sudo dnf install contr
+```
+
 ## Building
 
 Install the GTK, libadwaita and VTE development packages, then build with Cargo. See
