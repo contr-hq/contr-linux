@@ -32,12 +32,13 @@ GTK's Broadway backend draws the window in a browser, which makes screenshots re
 
 ```sh
 gtk4-broadwayd --port 8085 :5 &
-GDK_BACKEND=broadway BROADWAY_DISPLAY=:5 ADW_DEBUG_COLOR_SCHEME=prefer-light ADW_DEBUG_ACCENT_COLOR=blue \
+GDK_BACKEND=broadway BROADWAY_DISPLAY=:5 ADW_DEBUG_COLOR_SCHEME=prefer-light \
   CONTR_HOST=unix://$XDG_RUNTIME_DIR/contr-linux-fake.sock cargo run -p contr-desktop
 ```
 
 and open `http://127.0.0.1:8085`. Distribution defaults such as Ubuntu's Yaru theme still apply; a keyfile GSettings
-backend (`GSETTINGS_BACKEND=keyfile` with `gtk-theme='Adwaita'`) gives the stock look the design uses.
+backend (`GSETTINGS_BACKEND=keyfile` with `gtk-theme='Adwaita'`) gives the stock look the design uses. Ubuntu's
+libadwaita also reads Yaru from the settings portal, which `ADW_DISABLE_PORTAL=1` turns off.
 
 ## Packages
 
