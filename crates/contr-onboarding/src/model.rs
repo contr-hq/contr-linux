@@ -1,13 +1,38 @@
 //! What onboarding shows: the engine the daemon manages, the fixes its checks offer, and the steps of a running fix.
 
+use contr_core::product;
 use contr_daemon_ui::{Link, Status, engine_name};
 use contr_sdk::api::common::v1::{ErrorReason, Progress, Remediation};
 use contr_sdk::api::diagnostics::v1::{Check, CheckStatus, RemediationOutcome};
 use contr_sdk::api::engine::v1::EngineState;
+use contr_sdk::api::settings::v1::SettingsState;
 use contr_ui_common::widgets::StatusKind;
 
 const INSTALL_ENGINE: &str = "install-engine";
+const UPDATES_CHECK: &str = "updates.check";
 const JOIN_DOCKER_GROUP: &str = "join-docker-group";
+
+/// The note about the daemon's daily release check: none while `updates.check` is off, and without the way to turn
+/// it off when an administrator locks it.
+pub(crate) fn release_check_note(state: &SettingsState) -> Option<String> {
+    let check = state
+        .settings
+        .as_ref()
+        .and_then(|settings| settings.updates)
+        .is_some_and(|updates| updates.check);
+    if !check {
+        return None;
+    }
+    let locked = state.locked_paths.iter().any(|path| path == UPDATES_CHECK);
+    Some(if locked {
+        format!("{} checks GitHub once a day for new releases.", product::DISPLAY_NAME)
+    } else {
+        format!(
+            "{} checks GitHub once a day for new releases; turn this off in Preferences → Updates.",
+            product::DISPLAY_NAME
+        )
+    })
+}
 
 /// The row for the engine the daemon manages.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,6 +191,7 @@ pub(crate) fn finish(outcome: RemediationOutcome) -> Option<Finish> {
 #[cfg(test)]
 mod tests {
     use contr_sdk::api::daemon::v1::EngineInfo;
+    use contr_sdk::api::settings::v1::{Settings, UpdatesSettings};
 
     use super::*;
 
@@ -246,5 +272,28 @@ mod tests {
         };
         assert_eq!(finish(outcome), Some(Finish::Restart));
         assert_eq!(finish(RemediationOutcome::default()), None);
+    }
+
+    #[test]
+    fn the_release_check_note_follows_the_setting_and_its_lock() {
+        let state = |check: bool, locked: bool| SettingsState {
+            settings: Some(Settings {
+                updates: Some(UpdatesSettings {
+                    check,
+                    prereleases: false,
+                }),
+                ..Settings::default()
+            }),
+            locked_paths: if locked {
+                vec![UPDATES_CHECK.to_owned()]
+            } else {
+                Vec::new()
+            },
+            etag: String::new(),
+        };
+        assert!(release_check_note(&state(true, false)).is_some_and(|note| note.contains("Preferences")));
+        assert!(release_check_note(&state(true, true)).is_some_and(|note| !note.contains("Preferences")));
+        assert_eq!(release_check_note(&state(false, true)), None);
+        assert_eq!(release_check_note(&state(false, false)), None);
     }
 }

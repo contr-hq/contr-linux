@@ -1,5 +1,5 @@
 use contr_core::product;
-use contr_daemon_ui::{Daemon, Status, describe, failure, remediation_label, run_remediation};
+use contr_daemon_ui::{Daemon, SettingsHandle, Status, describe, failure, remediation_label, run_remediation};
 use contr_sdk::Error;
 use contr_sdk::api::common::v1::{Progress, Remediation};
 use contr_sdk::api::diagnostics::v1::{Check, RemediationOutcome, RunChecksRequest};
@@ -23,6 +23,7 @@ pub struct OnboardingPage {
     fixing: Option<Remediation>,
     steps: Steps,
     finish: Option<Finish>,
+    release_check_note: Option<String>,
 }
 
 #[derive(Debug)]
@@ -43,6 +44,7 @@ pub enum OnboardingOutput {
 pub enum OnboardingCmd {
     Status(Box<Status>),
     Checks(Result<Vec<Check>, String>),
+    ReleaseCheckNote(Option<String>),
     Progress(Progress),
     /// `Err(None)`: the user dismissed the fix's prompt.
     Fixed(Result<RemediationOutcome, Option<String>>),
@@ -52,6 +54,7 @@ pub struct OnboardingWidgets {
     stack: gtk::Stack,
     description: gtk::Label,
     engines: gtk::ListBox,
+    release_check: gtk::Label,
     fix_title: gtk::Label,
     progress: gtk::ProgressBar,
     fix_steps: gtk::ListBox,
@@ -98,6 +101,11 @@ impl Component for OnboardingPage {
         );
         choose.append(&engines);
         choose.append(&continue_button);
+        let release_check = text("");
+        release_check.add_css_class("dim-label");
+        release_check.add_css_class("caption");
+        release_check.set_visible(false);
+        choose.append(&release_check);
 
         let fix_title = title("");
         let progress = gtk::ProgressBar::builder().margin_top(12).build();
@@ -180,11 +188,13 @@ impl Component for OnboardingPage {
             fixing: None,
             steps: Steps::default(),
             finish: None,
+            release_check_note: None,
         };
         let mut widgets = OnboardingWidgets {
             stack,
             description,
             engines,
+            release_check,
             fix_title,
             progress,
             fix_steps,
@@ -237,8 +247,10 @@ impl Component for OnboardingPage {
                 if self.checked_for != Some(key) && self.status.client().is_some() {
                     self.checked_for = Some(key);
                     self.run_checks(&sender);
+                    self.load_release_check_note(&sender);
                 }
             }
+            OnboardingCmd::ReleaseCheckNote(note) => self.release_check_note = note,
             OnboardingCmd::Checks(Ok(checks)) => self.checks = checks,
             OnboardingCmd::Checks(Err(message)) => root.add_toast(adw::Toast::new(&message)),
             OnboardingCmd::Progress(progress) => self.steps.push(progress),
@@ -273,6 +285,16 @@ impl OnboardingPage {
                     .map(|response| response.into_inner().checks)
                     .map_err(|status| describe(&Error::from(status))),
             )
+        });
+    }
+
+    fn load_release_check_note(&self, sender: &ComponentSender<Self>) {
+        let Some(client) = self.status.client().cloned() else {
+            return;
+        };
+        sender.oneshot_command(async move {
+            let state = SettingsHandle::new(client).get().await;
+            OnboardingCmd::ReleaseCheckNote(state.ok().and_then(|state| model::release_check_note(&state)))
         });
     }
 
@@ -311,6 +333,10 @@ impl OnboardingPage {
         } else {
             "Contr manages a container engine on this computer, and didn’t find one yet."
         });
+        widgets
+            .release_check
+            .set_label(self.release_check_note.as_deref().unwrap_or_default());
+        widgets.release_check.set_visible(self.release_check_note.is_some());
         widgets.engines.remove_all();
         if let Some(engine) = &engine {
             widgets.engines.append(&engine_row(engine, &fixes, input));

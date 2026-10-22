@@ -39,6 +39,12 @@ sudo curl -fsSo /etc/yum.repos.d/contr-stable.repo https://contr-hq.github.io/co
 sudo dnf install contr
 ```
 
+Every package of a release carries a GitHub build attestation naming the workflow and commit that built it, and
+contr-packages signs the repositories, the RPMs and each release's `SHA256SUMS`.
+[Verifying downloads](https://github.com/contr-hq/contr/blob/main/docs/verifying.md) shows how to check them, and the
+[code signing policy](https://github.com/contr-hq/contr/blob/main/docs/code-signing-policy.md) says what is signed and by
+whom.
+
 ## Building
 
 Install the GTK, libadwaita and VTE development packages, then build with Cargo. See
