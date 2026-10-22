@@ -140,7 +140,9 @@ jobs:
     needs: install
     runs-on: ubuntu-latest
     permissions:
+      attestations: write
       contents: write
+      id-token: write
     env:
       PACKAGES_DISPATCH_TOKEN: ${{ secrets.PACKAGES_DISPATCH_TOKEN }}
     steps:
@@ -149,6 +151,13 @@ jobs:
         with:
           name: packages
           path: packages
+      - name: Attest where the packages were built
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            packages/contr_*.deb
+            packages/contr-*.rpm
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
