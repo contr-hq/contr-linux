@@ -483,7 +483,7 @@ fn updates_page(state: &Rc<Dialog>, status: &Status) -> adw::PreferencesPage {
     group.add(
         &adw::ActionRow::builder()
             .title("Version")
-            .subtitle(env!("CARGO_PKG_VERSION"))
+            .subtitle(product::VERSION)
             .css_classes(["property"])
             .build(),
     );

@@ -154,7 +154,7 @@ impl Component for App {
     fn init(background: bool, root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
         let daemon = Daemon::connect(ClientIdentity {
             name: format!("{}-desktop", product::SLUG),
-            version: env!("CARGO_PKG_VERSION").to_owned(),
+            version: product::VERSION.to_owned(),
         });
         let settings = Rc::new(RefCell::new(ClientSettings::load()));
 
@@ -698,7 +698,7 @@ fn about_dialog() -> adw::AboutDialog {
     adw::AboutDialog::builder()
         .application_name(product::DISPLAY_NAME)
         .application_icon(product::APP_ID)
-        .version(env!("CARGO_PKG_VERSION"))
+        .version(product::VERSION)
         .license_type(gtk::License::Apache20)
         .website(env!("CARGO_PKG_REPOSITORY"))
         .issue_url(format!("{}/issues", env!("CARGO_PKG_REPOSITORY")))
