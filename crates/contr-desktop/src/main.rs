@@ -10,6 +10,7 @@ mod sandbox;
 mod sections;
 mod shortcuts;
 mod tray;
+mod updates;
 
 use contr_core::product;
 use relm4::RelmApp;

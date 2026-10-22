@@ -18,6 +18,8 @@ pub(crate) struct ClientSettings {
     pub(crate) notify: Notify,
     /// The user finished or skipped first-run setup.
     pub(crate) onboarded: bool,
+    /// The release whose page the user opened from the update banner; the banner stays hidden for it.
+    pub(crate) dismissed_update: Option<String>,
 }
 
 impl Default for ClientSettings {
@@ -26,6 +28,7 @@ impl Default for ClientSettings {
             keep_running: true,
             notify: Notify::default(),
             onboarded: false,
+            dismissed_update: None,
         }
     }
 }
