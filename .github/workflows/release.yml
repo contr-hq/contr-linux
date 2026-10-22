@@ -141,6 +141,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      PACKAGES_DISPATCH_TOKEN: ${{ secrets.PACKAGES_DISPATCH_TOKEN }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -156,3 +158,9 @@ jobs:
           prerelease=$([[ "$GITHUB_REF_NAME" == *-* ]] && echo --prerelease || true)
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "Contr for Linux ${GITHUB_REF_NAME#v}" \
             --notes-file "$notes" $prerelease packages/contr_*.deb packages/contr-*.rpm packages/SHA256SUMS
+      # contr-packages also collects new releases daily; the dispatch makes it collect this one now.
+      - name: Have the package repositories pick up the release
+        if: startsWith(github.ref, 'refs/tags/v') && env.PACKAGES_DISPATCH_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ env.PACKAGES_DISPATCH_TOKEN }}
+        run: gh api repos/contr-hq/contr-packages/dispatches -f event_type=release
