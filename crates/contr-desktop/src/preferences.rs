@@ -401,11 +401,20 @@ fn network_page(state: &Rc<Dialog>, status: &Status) -> adw::PreferencesPage {
         lock(&pass, &state.locked_paths, "proxy.pass_to_containers");
         lock(&trust, &state.locked_paths, "certificates.trust_system");
         if !configurable {
-            let note = engine_owns_configuration(&dialog.daemon.status());
-            for group in [&proxy, &certificates] {
-                group.set_description(Some(&note));
-                group.set_sensitive(false);
-            }
+            // The engine keeps its own proxy, but the daemon's update check still goes through this one.
+            let kind = dialog
+                .daemon
+                .status()
+                .engine_info
+                .as_ref()
+                .map_or("The engine", engine_kind);
+            proxy.set_description(Some(&format!(
+                "How {} checks GitHub for new releases. {kind} keeps its own proxy for pulls, pushes and builds.",
+                product::DISPLAY_NAME
+            )));
+            pass.set_visible(false);
+            certificates.set_description(Some(&engine_owns_configuration(&dialog.daemon.status())));
+            certificates.set_sensitive(false);
         }
 
         let weak = Rc::downgrade(dialog);
@@ -483,7 +492,7 @@ fn updates_page(state: &Rc<Dialog>, status: &Status) -> adw::PreferencesPage {
     group.add(
         &adw::ActionRow::builder()
             .title("Version")
-            .subtitle(env!("CARGO_PKG_VERSION"))
+            .subtitle(product::VERSION)
             .css_classes(["property"])
             .build(),
     );
