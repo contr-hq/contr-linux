@@ -103,6 +103,14 @@ the daemon's user unit, falling back to the log file in the runtime directory, o
 bundle streams `CreateBundle` into a temporary file and copies it to the file a save dialog names once the stream
 ends.
 
+## Updates
+
+The client installs no updates itself; packages and Flatpak do. Once connected, and hourly after, it reads
+`UpdatesService.GetUpdateStatus`, the result of the daemon's daily check, together with `updates.check`. While that
+setting is on and a newer release exists, a banner above the window links to its release page; opening it hides the
+banner for that version (`dismissed_update` in `desktop.json`). Preferences shows the latest check, its error if it
+failed, Check Now (`CheckForUpdates`) and the `updates.check` and `updates.prereleases` switches.
+
 ## Onboarding
 
 Until the user finishes or skips it (`onboarded` in `desktop.json`), the window shows `contr-onboarding` instead of the

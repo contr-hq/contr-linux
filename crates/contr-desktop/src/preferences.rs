@@ -9,14 +9,15 @@ use contr_sdk::api::daemon::v1::Capability;
 use contr_sdk::api::engine::v1::{EngineState, StreamUsageRequest};
 use contr_sdk::api::settings::v1::{
     CertificateSettings, EngineSettings, ProxyMode, ProxySettings, RegistrySettings, Settings, SettingsState,
-    UpdateSettingsRequest,
+    UpdateSettingsRequest, UpdatesSettings,
 };
+use contr_sdk::api::updates::v1::{CheckForUpdatesRequest, GetUpdateStatusRequest, UpdateStatus};
 use contr_ui_common::format;
 use relm4::adw::{self, prelude::*};
-use relm4::gtk::{self, glib};
+use relm4::gtk::{self, gio, glib};
 
 use crate::client_settings::ClientSettings;
-use crate::{autostart, sandbox};
+use crate::{autostart, sandbox, updates};
 
 const PROXY_MODES: [(&str, ProxyMode); 3] = [
     ("System", ProxyMode::System),
@@ -49,7 +50,7 @@ pub(crate) fn present(parent: &impl IsA<gtk::Widget>, context: &PreferencesConte
     dialog.add(&general(&state, context, &status));
     dialog.add(&engine_page(&state, &status));
     dialog.add(&network_page(&state, &status));
-    dialog.add(&updates_page());
+    dialog.add(&updates_page(&state, &status));
     let owner = RefCell::new(Some(Rc::clone(&state)));
     dialog.connect_closed(move |_| {
         if let Some(state) = owner.borrow_mut().take()
@@ -467,7 +468,7 @@ fn network_page(state: &Rc<Dialog>, status: &Status) -> adw::PreferencesPage {
     page
 }
 
-fn updates_page() -> adw::PreferencesPage {
+fn updates_page(state: &Rc<Dialog>, status: &Status) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::builder()
         .title("Updates")
         .icon_name("software-update-available-symbolic")
@@ -487,6 +488,158 @@ fn updates_page() -> adw::PreferencesPage {
             .build(),
     );
     page.add(&group);
+
+    let releases = adw::PreferencesGroup::builder().title("New releases").build();
+    let check = adw::SwitchRow::builder()
+        .title("Check for new releases")
+        .subtitle("Once a day, and shows a banner when one is out")
+        .build();
+    let prereleases = adw::SwitchRow::builder().title("Include pre-releases").build();
+    let latest = adw::ActionRow::builder()
+        .title("Latest check")
+        .subtitle("Not checked yet")
+        .build();
+    let check_now = gtk::Button::builder()
+        .label("Check Now")
+        .valign(gtk::Align::Center)
+        .build();
+    latest.add_suffix(&check_now);
+    let release = adw::ActionRow::builder().visible(false).build();
+    let open = gtk::Button::builder()
+        .icon_name("contr-open-external-symbolic")
+        .tooltip_text("Open the Release Page")
+        .valign(gtk::Align::Center)
+        .css_classes(["flat"])
+        .build();
+    release.add_suffix(&open);
+    for row in [
+        check.upcast_ref::<gtk::Widget>(),
+        prereleases.upcast_ref(),
+        latest.upcast_ref(),
+        release.upcast_ref(),
+    ] {
+        releases.add(row);
+    }
+    page.add(&releases);
+    let url = Rc::new(RefCell::new(String::new()));
+    open.connect_clicked({
+        let url = Rc::clone(&url);
+        move |button| {
+            gtk::UriLauncher::new(&url.borrow()).launch(
+                button.root().and_downcast_ref::<gtk::Window>(),
+                gio::Cancellable::NONE,
+                |_| {},
+            );
+        }
+    });
+    let show = {
+        let (latest, release, url) = (latest.clone(), release.clone(), Rc::clone(&url));
+        move |status: &UpdateStatus| {
+            latest.set_subtitle(&updates::last_check(status, std::time::SystemTime::now()));
+            release.set_visible(status.available.is_some());
+            if let Some(available) = &status.available {
+                release.set_title(&format!("{} {} is available", product::DISPLAY_NAME, available.version));
+                url.replace(available.url.clone());
+            }
+        }
+    };
+
+    if let Some(client) = status.client().cloned() {
+        let show = show.clone();
+        glib::spawn_future_local(async move {
+            let result =
+                relm4::spawn(async move { client.updates().get_update_status(GetUpdateStatusRequest {}).await }).await;
+            if let Ok(Ok(response)) = result
+                && let Some(status) = response.into_inner().status
+            {
+                show(&status);
+            }
+        });
+    }
+    let weak = Rc::downgrade(state);
+    check_now.connect_clicked(move |button| {
+        let Some(dialog) = weak.upgrade() else { return };
+        let Some(client) = dialog.daemon.status().client().cloned() else {
+            return;
+        };
+        button.set_sensitive(false);
+        let (button, show, weak) = (button.clone(), show.clone(), Rc::downgrade(&dialog));
+        glib::spawn_future_local(async move {
+            let result =
+                relm4::spawn(async move { client.updates().check_for_updates(CheckForUpdatesRequest {}).await }).await;
+            button.set_sensitive(true);
+            match result {
+                Ok(Ok(response)) => {
+                    if let Some(status) = response.into_inner().status {
+                        show(&status);
+                    }
+                }
+                Ok(Err(status)) => {
+                    if let Some(dialog) = weak.upgrade() {
+                        dialog
+                            .window
+                            .add_toast(adw::Toast::new(&describe(&contr_sdk::Error::from(status))));
+                    }
+                }
+                Err(_) => {}
+            }
+        });
+    });
+
+    load_daemon_settings(state, status, move |dialog, state, _| {
+        let settings = state
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.updates)
+            .unwrap_or_default();
+        check.set_active(settings.check);
+        prereleases.set_active(settings.prereleases);
+        for row in [prereleases.upcast_ref::<gtk::Widget>(), latest.upcast_ref()] {
+            row.set_visible(settings.check);
+        }
+        lock(&check, &state.locked_paths, "updates.check");
+        lock(&prereleases, &state.locked_paths, "updates.prereleases");
+        let weak = Rc::downgrade(dialog);
+        let (prereleases_row, latest_row, release_row) = (prereleases.clone(), latest.clone(), release.clone());
+        check.connect_active_notify(move |row| {
+            let on = row.is_active();
+            for shown in [prereleases_row.upcast_ref::<gtk::Widget>(), latest_row.upcast_ref()] {
+                shown.set_visible(on);
+            }
+            if !on {
+                release_row.set_visible(false);
+            }
+            if let Some(dialog) = weak.upgrade() {
+                update(
+                    &dialog,
+                    Settings {
+                        updates: Some(UpdatesSettings {
+                            check: on,
+                            ..UpdatesSettings::default()
+                        }),
+                        ..Settings::default()
+                    },
+                    &["updates.check"],
+                );
+            }
+        });
+        let weak = Rc::downgrade(dialog);
+        prereleases.connect_active_notify(move |row| {
+            if let Some(dialog) = weak.upgrade() {
+                update(
+                    &dialog,
+                    Settings {
+                        updates: Some(UpdatesSettings {
+                            prereleases: row.is_active(),
+                            ..UpdatesSettings::default()
+                        }),
+                        ..Settings::default()
+                    },
+                    &["updates.prereleases"],
+                );
+            }
+        });
+    });
     page
 }
 

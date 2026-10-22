@@ -6,7 +6,7 @@ use contr_compose::{ComposeOutput, ComposePage};
 use contr_containers::{ContainersMsg, ContainersOutput, ContainersPage};
 use contr_containers_api::{ContainerTab, OpenContainer, RunImage};
 use contr_core::product;
-use contr_daemon_ui::{Daemon, EngineAction, Status, TROUBLESHOOT_ACTION, engine_name, while_running};
+use contr_daemon_ui::{Daemon, EngineAction, SettingsHandle, Status, TROUBLESHOOT_ACTION, engine_name, while_running};
 use contr_images::{ImagesMsg, ImagesOutput, ImagesPage};
 use contr_kubernetes::{KubernetesOutput, KubernetesPage};
 use contr_networks::{NetworksOutput, NetworksPage};
@@ -18,6 +18,7 @@ use contr_sdk::api::containers::v1::{
 use contr_sdk::api::daemon::v1::Capability;
 use contr_sdk::api::engine::v1::EngineState;
 use contr_sdk::api::kubernetes::v1::ClusterState;
+use contr_sdk::api::updates::v1::{GetUpdateStatusRequest, UpdateStatus};
 use contr_troubleshoot::{TroubleshootOutput, TroubleshootPage};
 use contr_volumes::{VolumesOutput, VolumesPage};
 use relm4::adw::{self, prelude::*};
@@ -29,7 +30,10 @@ use crate::engine_card::EngineCard;
 use crate::preferences::{self, PreferencesContext};
 use crate::sections::Section;
 use crate::tray::{self, ContrTray, RunningContainer, TrayState};
-use crate::{notifications, sandbox, shortcuts};
+use crate::{notifications, sandbox, shortcuts, updates};
+
+/// How often the client reads the daemon's latest update check.
+const UPDATE_POLL: std::time::Duration = std::time::Duration::from_hours(1);
 
 /// Name of the window's page that holds the sidebar and sections.
 const MAIN_PAGE: &str = "main";
@@ -59,6 +63,8 @@ pub(crate) struct App {
     /// Held only to keep the page running.
     _kubernetes_page: Controller<KubernetesPage>,
     cluster: ClusterState,
+    /// The newer release the banner announces.
+    notice: Option<updates::Notice>,
     /// Shown instead of the sections until the user finishes or skips setup.
     onboarding: Option<Controller<OnboardingPage>>,
 }
@@ -75,6 +81,7 @@ pub(crate) enum AppMsg {
     RestartContainer(String),
     Problems(usize),
     Finished(String),
+    OpenRelease,
     Cluster(ClusterState),
     ClusterReady,
     Onboarded,
@@ -88,6 +95,7 @@ pub(crate) enum AppCmd {
     Status(Box<Status>),
     Containers(ContainerEvent),
     Tray(Option<TrayHandle>),
+    Updates { status: Box<UpdateStatus>, check: bool },
     Failed(String),
 }
 
@@ -114,6 +122,7 @@ pub(crate) struct AppWidgets {
     card: EngineCard,
     engine_menu: gio::Menu,
     toasts: adw::ToastOverlay,
+    banner: adw::Banner,
 }
 
 struct SidebarRow {
@@ -239,7 +248,14 @@ impl Component for App {
         let content = gtk::Stack::builder()
             .transition_type(gtk::StackTransitionType::Crossfade)
             .build();
-        content.add_named(&split, Some(MAIN_PAGE));
+        let banner = adw::Banner::builder().button_label("Release Notes").build();
+        let banner_input = sender.input_sender().clone();
+        banner.connect_button_clicked(move |_| banner_input.emit(AppMsg::OpenRelease));
+        split.set_vexpand(true);
+        let main = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        main.append(&banner);
+        main.append(&split);
+        content.add_named(&main, Some(MAIN_PAGE));
         let onboarding = (!settings.borrow().onboarded).then(|| {
             let onboarding = OnboardingPage::builder().launch(daemon.clone()).forward(
                 sender.input_sender(),
@@ -277,6 +293,7 @@ impl Component for App {
         });
 
         follow_status(&daemon, &sender);
+        follow_updates(&daemon, &sender);
         follow_containers(&daemon, &sender);
         start_tray(&sender);
 
@@ -299,6 +316,7 @@ impl Component for App {
             _troubleshoot_page: troubleshoot_page,
             _kubernetes_page: kubernetes_page,
             cluster: ClusterState::Unspecified,
+            notice: None,
             onboarding,
         };
         if let Some(first) = rows.get(&Section::Containers) {
@@ -312,6 +330,7 @@ impl Component for App {
             card,
             engine_menu,
             toasts,
+            banner,
         };
         ComponentParts { model, widgets }
     }
@@ -362,6 +381,15 @@ impl Component for App {
                 });
             }
             AppMsg::Problems(count) => self.problems = count,
+            AppMsg::OpenRelease => {
+                if let Some(notice) = self.notice.take() {
+                    gtk::UriLauncher::new(&notice.url).launch(Some(root), gio::Cancellable::NONE, |_| {});
+                    self.settings.borrow_mut().dismissed_update = Some(notice.version);
+                    if let Err(error) = self.settings.borrow().save() {
+                        tracing::warn!(%error, "could not save the client settings");
+                    }
+                }
+            }
             AppMsg::Cluster(state) => self.cluster = state,
             AppMsg::ClusterReady => {
                 if !root.is_active() {
@@ -408,6 +436,10 @@ impl Component for App {
     ) {
         match message {
             AppCmd::Status(status) => self.status = *status,
+            AppCmd::Updates { status, check } => {
+                let dismissed = self.settings.borrow().dismissed_update.clone();
+                self.notice = updates::notice(&status, check, dismissed.as_deref());
+            }
             AppCmd::Containers(ContainerEvent::Snapshot(containers)) => {
                 self.containers = containers.into_iter().map(|c| (c.id.clone(), c)).collect();
             }
@@ -442,6 +474,12 @@ impl Component for App {
     }
 
     fn update_view(&self, widgets: &mut Self::Widgets, _sender: ComponentSender<Self>) {
+        if let Some(notice) = &self.notice {
+            widgets
+                .banner
+                .set_title(&format!("{} {} is available", product::DISPLAY_NAME, notice.version));
+        }
+        widgets.banner.set_revealed(self.notice.is_some());
         widgets.card.show(&self.status);
 
         if let Some(row) = widgets.rows.get(&Section::Containers) {
@@ -679,6 +717,41 @@ fn follow_status(daemon: &Daemon, sender: &ComponentSender<App>) {
                     if status.changed().await.is_err() {
                         return;
                     }
+                }
+            })
+            .drop_on_shutdown()
+    });
+}
+
+/// Reads the daemon's latest update check whenever a connection exists, then hourly; the daemon itself checks daily.
+fn follow_updates(daemon: &Daemon, sender: &ComponentSender<App>) {
+    let mut status = daemon.subscribe();
+    sender.command(move |out, shutdown| {
+        shutdown
+            .register(async move {
+                loop {
+                    let client = loop {
+                        if let Some(client) = status.borrow_and_update().client().cloned() {
+                            break client;
+                        }
+                        if status.changed().await.is_err() {
+                            return;
+                        }
+                    };
+                    let check = SettingsHandle::new(client.clone()).get().await.is_ok_and(|state| {
+                        state
+                            .settings
+                            .and_then(|settings| settings.updates)
+                            .is_some_and(|updates| updates.check)
+                    });
+                    let response = client.updates().get_update_status(GetUpdateStatusRequest {}).await;
+                    if let Some(update) = response.ok().and_then(|response| response.into_inner().status) {
+                        out.emit(AppCmd::Updates {
+                            status: Box::new(update),
+                            check,
+                        });
+                    }
+                    tokio::time::sleep(UPDATE_POLL).await;
                 }
             })
             .drop_on_shutdown()

@@ -144,7 +144,7 @@ checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 [[package]]
 name = "contr-api"
 version = "0.1.0"
-source = "git+https://github.com/contr-hq/contr?rev=57c93aca266b2ed589bc9b219d19f15ec391e28a#57c93aca266b2ed589bc9b219d19f15ec391e28a"
+source = "git+https://github.com/contr-hq/contr?rev=3266efeb4b3335281f54e2170aa4ceafa71880cf#3266efeb4b3335281f54e2170aa4ceafa71880cf"
 dependencies = [
  "prost",
  "prost-types",
@@ -188,7 +188,7 @@ version = "0.1.0"
 [[package]]
 name = "contr-core"
 version = "0.1.0"
-source = "git+https://github.com/contr-hq/contr?rev=57c93aca266b2ed589bc9b219d19f15ec391e28a#57c93aca266b2ed589bc9b219d19f15ec391e28a"
+source = "git+https://github.com/contr-hq/contr?rev=3266efeb4b3335281f54e2170aa4ceafa71880cf#3266efeb4b3335281f54e2170aa4ceafa71880cf"
 dependencies = [
  "serde",
  "serde_json",
@@ -227,6 +227,7 @@ dependencies = [
  "contr-ui-common",
  "contr-volumes",
  "ksni",
+ "prost-types",
  "relm4",
  "serde",
  "serde_json",
@@ -285,7 +286,7 @@ dependencies = [
 [[package]]
 name = "contr-sdk"
 version = "0.1.0"
-source = "git+https://github.com/contr-hq/contr?rev=57c93aca266b2ed589bc9b219d19f15ec391e28a#57c93aca266b2ed589bc9b219d19f15ec391e28a"
+source = "git+https://github.com/contr-hq/contr?rev=3266efeb4b3335281f54e2170aa4ceafa71880cf#3266efeb4b3335281f54e2170aa4ceafa71880cf"
 dependencies = [
  "contr-api",
  "contr-core",
@@ -304,7 +305,7 @@ dependencies = [
 [[package]]
 name = "contr-transport"
 version = "0.1.0"
-source = "git+https://github.com/contr-hq/contr?rev=57c93aca266b2ed589bc9b219d19f15ec391e28a#57c93aca266b2ed589bc9b219d19f15ec391e28a"
+source = "git+https://github.com/contr-hq/contr?rev=3266efeb4b3335281f54e2170aa4ceafa71880cf#3266efeb4b3335281f54e2170aa4ceafa71880cf"
 dependencies = [
  "contr-core",
  "futures-util",
