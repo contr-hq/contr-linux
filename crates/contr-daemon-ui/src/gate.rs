@@ -285,6 +285,7 @@ fn present(status: &Status) -> Presentation {
             EngineAction::Start => "Starting the Engine",
             EngineAction::Stop => "Stopping the Engine",
             EngineAction::Restart => "Restarting the Engine",
+            EngineAction::Reset(_) => "Resetting the Engine",
         };
         return busy(title, progress.as_deref().unwrap_or_default());
     }

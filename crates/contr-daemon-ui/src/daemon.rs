@@ -1,17 +1,22 @@
+use std::collections::HashSet;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
 
-use contr_sdk::api::common::v1::{ErrorReason, Progress};
+use contr_sdk::api::common::v1::ErrorReason;
 use contr_sdk::api::daemon::v1::{BackendKind, Capability, EngineInfo, HandshakeResponse};
 use contr_sdk::api::engine::v1::{
-    EngineState, RestartRequest, StartRequest, StopRequest, WatchStateRequest, restart_response, start_response,
-    stop_response,
+    EngineState, ResetRequest, ResetScope, RestartRequest, StartRequest, StopRequest, WatchStateRequest,
 };
+use contr_sdk::api::operations::v1::OperationState;
 use contr_sdk::{Client, ClientIdentity, Error};
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 
+use crate::operations::{self, Activity, Kind, Operation};
 use crate::{RETRY_DELAY, describe};
+
+/// Notices a page can send while the shell is the one that shows them.
+const NOTICES: usize = 16;
 
 const ENGINE_INFO_ATTEMPTS: u32 = 5;
 const ENGINE_INFO_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
@@ -31,6 +36,18 @@ pub enum EngineAction {
     Start,
     Stop,
     Restart,
+    Reset(ResetScope),
+}
+
+impl EngineAction {
+    fn kind(self) -> Kind {
+        match self {
+            Self::Start => Kind::StartEngine(StartRequest {}),
+            Self::Stop => Kind::StopEngine(StopRequest {}),
+            Self::Restart => Kind::RestartEngine(RestartRequest {}),
+            Self::Reset(scope) => Kind::ResetEngine(ResetRequest { scope: scope.into() }),
+        }
+    }
 }
 
 /// What the client knows about the daemon and its engine at one moment.
@@ -51,7 +68,7 @@ pub struct Status {
     pub changed_at: Option<SystemTime>,
     /// The last stop came from this client.
     pub stopped_by_user: bool,
-    /// The engine operation this client is running, with its latest progress message.
+    /// The running engine operation, whichever client started it, with its latest progress message.
     pub action: Option<(EngineAction, Option<String>)>,
 }
 
@@ -109,6 +126,9 @@ impl Status {
 #[derive(Clone, Debug)]
 pub struct Daemon {
     state: Arc<watch::Sender<Status>>,
+    activity: Arc<watch::Sender<Activity>>,
+    notices: broadcast::Sender<String>,
+    claimed: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Daemon {
@@ -117,8 +137,47 @@ impl Daemon {
     pub fn connect(identity: ClientIdentity) -> Self {
         let (state, _) = watch::channel(Status::initial());
         let state = Arc::new(state);
+        let (activity, _) = watch::channel(Activity::default());
+        let activity = Arc::new(activity);
+        let (notices, _) = broadcast::channel(NOTICES);
         relm4::spawn(supervise(Arc::clone(&state), identity));
-        Self { state }
+        relm4::spawn(operations::follow_activity(Arc::clone(&state), Arc::clone(&activity)));
+        Self {
+            state,
+            activity,
+            notices,
+            claimed: Arc::default(),
+        }
+    }
+
+    pub fn activity(&self) -> Activity {
+        self.activity.borrow().clone()
+    }
+
+    pub fn subscribe_activity(&self) -> watch::Receiver<Activity> {
+        self.activity.subscribe()
+    }
+
+    /// Shows `message` in the window's toasts, from work that outlives the page that started it.
+    pub fn notice(&self, message: impl Into<String>) {
+        let _ = self.notices.send(message.into());
+    }
+
+    pub fn subscribe_notices(&self) -> broadcast::Receiver<String> {
+        self.notices.subscribe()
+    }
+
+    /// Marks operation `id` as one whose end the caller reports, so the window's toasts leave it out.
+    pub fn claim(&self, id: &str) {
+        self.claimed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id.to_owned());
+    }
+
+    /// Whether a caller claimed operation `id`; forgets the claim.
+    pub fn take_claim(&self, id: &str) -> bool {
+        self.claimed.lock().unwrap_or_else(PoisonError::into_inner).remove(id)
     }
 
     pub fn status(&self) -> Status {
@@ -129,24 +188,41 @@ impl Daemon {
         self.state.subscribe()
     }
 
-    /// Runs `action` on the engine and waits for it to finish; cancelling the call does not cancel the operation.
+    /// Starts `action` on the engine as an operation the daemon owns, without waiting for it to finish.
+    pub async fn start(&self, action: EngineAction) -> Result<Operation, Error> {
+        let state = Arc::clone(&self.state);
+        relm4::spawn(async move { start_engine(&state, action).await })
+            .await
+            .map_err(|_| Error::Closed)?
+    }
+
+    /// Runs `action` on the engine as an operation the daemon owns and waits for it to finish; dropping the call
+    /// does not stop it.
     pub async fn run(&self, action: EngineAction) -> Result<(), Error> {
         let state = Arc::clone(&self.state);
         relm4::spawn(async move {
+            let started = start_engine(&state, action).await?;
             let client = state.borrow().client.clone().ok_or(Error::Closed)?;
-            state.send_modify(|status| {
-                status.action = Some((action, None));
-                if action == EngineAction::Stop {
-                    status.stopped_by_user = true;
-                }
-            });
-            let result = drive(&state, &client, action).await;
-            state.send_modify(|status| status.action = None);
-            result
+            let finished = operations::follow(&client, &started.id, |_| {}).await?;
+            match (finished.state(), finished.error) {
+                (OperationState::Failed, Some(error)) => Err(Error::from(tonic::Status::new(
+                    tonic::Code::from(error.code),
+                    error.message,
+                ))),
+                _ => Ok(()),
+            }
         })
         .await
         .map_err(|_| Error::Closed)?
     }
+}
+
+async fn start_engine(state: &watch::Sender<Status>, action: EngineAction) -> Result<Operation, Error> {
+    let client = state.borrow().client.clone().ok_or(Error::Closed)?;
+    if action == EngineAction::Stop {
+        state.send_modify(|status| status.stopped_by_user = true);
+    }
+    operations::start(&client, action.kind()).await
 }
 
 async fn supervise(state: Arc<watch::Sender<Status>>, identity: ClientIdentity) {
@@ -218,62 +294,6 @@ async fn engine_info(client: &Client) -> Option<EngineInfo> {
         tokio::time::sleep(ENGINE_INFO_DELAY).await;
     }
     None
-}
-
-enum Event {
-    Progress(Progress),
-    Done,
-}
-
-async fn drive(state: &watch::Sender<Status>, client: &Client, action: EngineAction) -> Result<(), Error> {
-    match action {
-        EngineAction::Start => {
-            let stream = client.engine().start(StartRequest {}).await?.into_inner();
-            follow_action(state, stream, |response| match response.event {
-                Some(start_response::Event::Progress(progress)) => Some(Event::Progress(progress)),
-                Some(start_response::Event::State(_)) => Some(Event::Done),
-                None => None,
-            })
-            .await
-        }
-        EngineAction::Stop => {
-            let stream = client.engine().stop(StopRequest {}).await?.into_inner();
-            follow_action(state, stream, |response| match response.event {
-                Some(stop_response::Event::Progress(progress)) => Some(Event::Progress(progress)),
-                Some(stop_response::Event::State(_)) => Some(Event::Done),
-                None => None,
-            })
-            .await
-        }
-        EngineAction::Restart => {
-            let stream = client.engine().restart(RestartRequest {}).await?.into_inner();
-            follow_action(state, stream, |response| match response.event {
-                Some(restart_response::Event::Progress(progress)) => Some(Event::Progress(progress)),
-                Some(restart_response::Event::State(_)) => Some(Event::Done),
-                None => None,
-            })
-            .await
-        }
-    }
-}
-
-async fn follow_action<T>(
-    state: &watch::Sender<Status>,
-    mut stream: tonic::Streaming<T>,
-    event: impl Fn(T) -> Option<Event>,
-) -> Result<(), Error> {
-    while let Some(response) = stream.message().await? {
-        match event(response) {
-            Some(Event::Progress(progress)) => state.send_modify(|status| {
-                if let Some((_, message)) = &mut status.action {
-                    *message = Some(progress.message);
-                }
-            }),
-            Some(Event::Done) => return Ok(()),
-            None => {}
-        }
-    }
-    Ok(())
 }
 
 /// Calls `body` with a client whenever the engine runs, and again `RETRY_DELAY` after it returns; drops it when the

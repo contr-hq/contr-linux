@@ -105,6 +105,7 @@ pub(crate) fn describe(status: &Status) -> CardText {
             EngineAction::Start => "Engine starting",
             EngineAction::Stop => "Engine stopping",
             EngineAction::Restart => "Engine restarting",
+            EngineAction::Reset(_) => "Engine resetting",
         };
         return card(CardKind::Busy, title, progress.clone().unwrap_or_default());
     }

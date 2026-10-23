@@ -4,6 +4,7 @@
 mod attachments;
 mod daemon;
 mod gate;
+pub mod operations;
 mod remediation;
 mod settings;
 

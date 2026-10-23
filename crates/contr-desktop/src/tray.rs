@@ -107,7 +107,7 @@ impl ksni::Tray for ContrTray {
             Some(EngineAction::Start) => items.push(item("Start engine", |tray| {
                 tray.input.emit(AppMsg::Engine(EngineAction::Start));
             })),
-            Some(EngineAction::Stop) | None => {}
+            Some(EngineAction::Stop | EngineAction::Reset(_)) | None => {}
         }
         items.push(MenuItem::Separator);
         items.push(item(&format!("Quit {}", product::DISPLAY_NAME), |tray| {

@@ -14,7 +14,7 @@ contr-sdk.workspace = true
 contr-ui-common.workspace = true
 prost-types.workspace = true
 relm4.workspace = true
-tokio = { workspace = true, features = ["macros", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "macros", "sync", "time"] }
 tonic.workspace = true
 tracing.workspace = true
 
