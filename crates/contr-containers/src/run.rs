@@ -6,12 +6,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use contr_daemon_ui::operations::{self, Kind};
 use contr_daemon_ui::{Daemon, describe};
 use contr_sdk::api::containers::v1::{
     CreateContainerRequest, MountKind, MountSpec, PortPublication, Protocol, RestartMode, RestartPolicy,
 };
 use contr_sdk::api::images::v1::{InspectImageRequest, PullImageRequest};
 use contr_sdk::api::networks::v1::{CheckHostPortsRequest, HostPort};
+use contr_sdk::api::operations::v1::OperationState;
 use contr_sdk::{Client, Error};
 use contr_ui_common::format;
 use relm4::adw::{self, prelude::*};
@@ -172,6 +174,8 @@ struct State {
     run: gtk::Button,
     error: gtk::Label,
     local: RefCell<Option<bool>>,
+    /// The pull the dialog waits for, and whether the dialog started it rather than joining one already running.
+    pulling: RefCell<Option<(String, bool)>>,
     on_started: Box<dyn Fn(String)>,
 }
 
@@ -188,7 +192,9 @@ pub(crate) fn present(
     // Widget callbacks hold the state weakly; this handler owns it until the dialog closes.
     let owner = RefCell::new(Some(Rc::clone(&state)));
     state.dialog.connect_closed(move |_| {
-        owner.borrow_mut().take();
+        if let Some(state) = owner.borrow_mut().take() {
+            state.stop_pull();
+        }
     });
     state.dialog.present(Some(parent));
     if image.is_empty() {
@@ -379,6 +385,7 @@ fn build(daemon: &Daemon, image: &str, taken: HashMap<u32, String>, on_started: 
         run: run.clone(),
         error,
         local: RefCell::new(None),
+        pulling: RefCell::new(None),
         on_started,
     });
 
@@ -850,24 +857,74 @@ impl State {
         self.run.set_label(if pull_first { "Pulling…" } else { "Starting…" });
         self.error.set_visible(false);
         let weak = Rc::downgrade(self);
+        let owned = self
+            .daemon
+            .activity()
+            .running_where(|kind| {
+                matches!(kind, Kind::PullImage(request) if request.reference == spec.image && request.platform.is_empty())
+            })
+            .is_none();
         glib::spawn_future_local(async move {
-            let result = relm4::spawn(async move {
-                if pull_first {
-                    pull(&client, &spec.image).await?;
+            if pull_first {
+                let request = PullImageRequest {
+                    reference: spec.image.clone(),
+                    platform: String::new(),
+                };
+                let puller = client.clone();
+                let started = relm4::spawn(async move { operations::start(&puller, Kind::PullImage(request)).await });
+                let operation = match started.await {
+                    Ok(Ok(operation)) => operation,
+                    Ok(Err(error)) => return show_error(&weak, &describe(&error)),
+                    Err(_) => return show_error(&weak, INTERRUPTED),
+                };
+                let Some(state) = weak.upgrade() else { return };
+                if owned {
+                    // The dialog shows how its own pull ends.
+                    state.daemon.claim(&operation.id);
                 }
+                *state.pulling.borrow_mut() = Some((operation.id.clone(), owned));
+                drop(state);
+                let follower = client.clone();
+                let finished = relm4::spawn(async move { operations::follow(&follower, &operation.id, |_| {}).await });
+                let finished = finished.await;
+                let Some(state) = weak.upgrade() else { return };
+                state.pulling.take();
+                match finished {
+                    Ok(Ok(operation)) if operation.state() == OperationState::Succeeded => {}
+                    Ok(Ok(operation)) => {
+                        let message = operation
+                            .error
+                            .map_or_else(|| "The pull stopped.".to_owned(), |error| error.message);
+                        return state.show_error(&message);
+                    }
+                    Ok(Err(error)) => return state.show_error(&describe(&error)),
+                    Err(_) => return state.show_error(INTERRUPTED),
+                }
+                state.run.set_label("Starting…");
+            }
+            let created = relm4::spawn(async move {
                 let response = client.containers().create_container(spec.request()).await?;
                 Ok::<_, Error>(response.into_inner().id)
-            })
-            .await;
+            });
+            let created = created.await;
             let Some(state) = weak.upgrade() else { return };
-            match result {
+            match created {
                 Ok(Ok(id)) => {
                     state.dialog.close();
                     (state.on_started)(id);
                 }
                 Ok(Err(error)) => state.show_error(&describe(&error)),
-                Err(_) => state.show_error("The request was interrupted."),
+                Err(_) => state.show_error(INTERRUPTED),
             }
+        });
+    }
+
+    /// Cancels the pull the dialog waits for, when the dialog started it.
+    fn stop_pull(&self) {
+        let Some((id, true)) = self.pulling.take() else { return };
+        let Some(client) = self.client() else { return };
+        relm4::spawn(async move {
+            let _ = operations::cancel(&client, &id).await;
         });
     }
 
@@ -875,6 +932,14 @@ impl State {
         self.error.set_label(message);
         self.error.set_visible(true);
         self.update_command();
+    }
+}
+
+const INTERRUPTED: &str = "The request was interrupted.";
+
+fn show_error(state: &std::rc::Weak<State>, message: &str) {
+    if let Some(state) = state.upgrade() {
+        state.show_error(message);
     }
 }
 
@@ -911,16 +976,6 @@ async fn in_use(client: &Client, ports: Vec<u32>) -> Vec<u32> {
             .collect(),
         _ => Vec::new(),
     }
-}
-
-async fn pull(client: &Client, reference: &str) -> Result<(), Error> {
-    let request = PullImageRequest {
-        reference: reference.to_owned(),
-        platform: String::new(),
-    };
-    let mut stream = client.images().pull_image(request).await?.into_inner();
-    while stream.message().await?.is_some() {}
-    Ok(())
 }
 
 #[cfg(test)]

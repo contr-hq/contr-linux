@@ -1,23 +1,31 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use contr_compose::{ComposeOutput, ComposePage};
 use contr_containers::{ContainersMsg, ContainersOutput, ContainersPage};
 use contr_containers_api::{ContainerTab, OpenContainer, RunImage};
 use contr_core::product;
-use contr_daemon_ui::{Daemon, EngineAction, SettingsHandle, Status, TROUBLESHOOT_ACTION, engine_name, while_running};
+use contr_daemon_ui::operations::{self, Activity, Kind, Operation};
+use contr_daemon_ui::{
+    Daemon, EngineAction, SettingsHandle, Status, TROUBLESHOOT_ACTION, describe, engine_name, remediation_label,
+    while_running,
+};
 use contr_images::{ImagesMsg, ImagesOutput, ImagesPage};
 use contr_kubernetes::{KubernetesOutput, KubernetesPage};
 use contr_networks::{NetworksOutput, NetworksPage};
 use contr_onboarding::{OnboardingOutput, OnboardingPage};
 use contr_sdk::ClientIdentity;
+use contr_sdk::api::common::v1::Remediation;
 use contr_sdk::api::containers::v1::{
     Container, ContainerState, RestartContainerRequest, WatchContainersRequest, watch_containers_response,
 };
 use contr_sdk::api::daemon::v1::Capability;
+use contr_sdk::api::diagnostics::v1::RunRemediationRequest;
 use contr_sdk::api::engine::v1::EngineState;
 use contr_sdk::api::kubernetes::v1::ClusterState;
+use contr_sdk::api::operations::v1::OperationState;
 use contr_sdk::api::updates::v1::{GetUpdateStatusRequest, UpdateStatus};
 use contr_troubleshoot::{TroubleshootOutput, TroubleshootPage};
 use contr_volumes::{VolumesOutput, VolumesPage};
@@ -25,6 +33,7 @@ use relm4::adw::{self, prelude::*};
 use relm4::gtk::{self, gio, glib};
 use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 
+use crate::activity::ActivityView;
 use crate::client_settings::ClientSettings;
 use crate::engine_card::EngineCard;
 use crate::preferences::{self, PreferencesContext};
@@ -41,6 +50,8 @@ const MAIN_PAGE: &str = "main";
 pub(crate) struct App {
     daemon: Daemon,
     status: Status,
+    /// The daemon's operations as last shown, to tell which have finished since.
+    activity: Activity,
     containers: BTreeMap<String, Container>,
     section: Section,
     tray: Option<ksni::Handle<ContrTray>>,
@@ -80,7 +91,10 @@ pub(crate) enum AppMsg {
     Engine(EngineAction),
     RestartContainer(String),
     Problems(usize),
-    Finished(String),
+    CancelOperation(String),
+    Fix(Remediation),
+    /// Asks where to save the bundle of a finished bundle operation.
+    SaveBundle(String),
     OpenRelease,
     Cluster(ClusterState),
     ClusterReady,
@@ -95,7 +109,19 @@ pub(crate) enum AppCmd {
     Status(Box<Status>),
     Containers(ContainerEvent),
     Tray(Option<TrayHandle>),
-    Updates { status: Box<UpdateStatus>, check: bool },
+    Updates {
+        status: Box<UpdateStatus>,
+        check: bool,
+    },
+    Activity(Box<Activity>),
+    /// How a finished operation ended; `claimed` when the page that started it tells the user itself.
+    Reported {
+        operation: Box<Operation>,
+        message: String,
+        claimed: bool,
+    },
+    Notice(String),
+    BundleSaved(Result<PathBuf, String>),
     Failed(String),
 }
 
@@ -121,6 +147,7 @@ pub(crate) struct AppWidgets {
     stack: gtk::Stack,
     card: EngineCard,
     engine_menu: gio::Menu,
+    activity: ActivityView,
     toasts: adw::ToastOverlay,
     banner: adw::Banner,
 }
@@ -167,8 +194,10 @@ impl Component for App {
             .primary(true)
             .tooltip_text("Main Menu")
             .build();
+        let activity = ActivityView::new(sender.input_sender().clone());
         let sidebar_header = adw::HeaderBar::new();
         sidebar_header.pack_end(&menu_button);
+        sidebar_header.pack_end(&activity.button);
         let sidebar_view = adw::ToolbarView::new();
         sidebar_view.add_top_bar(&sidebar_header);
         sidebar_view.set_content(Some(
@@ -194,7 +223,6 @@ impl Component for App {
             .forward(sender.input_sender(), |output| match output {
                 ImagesOutput::OpenContainer(open) => AppMsg::Open(open),
                 ImagesOutput::Run(run) => AppMsg::Run(run),
-                ImagesOutput::Pulled(reference) => AppMsg::Finished(format!("Pulled {reference}")),
             });
         let volumes_page = VolumesPage::builder()
             .launch(daemon.clone())
@@ -210,7 +238,6 @@ impl Component for App {
             .launch(daemon.clone())
             .forward(sender.input_sender(), |output| match output {
                 ComposeOutput::OpenContainer(open) => AppMsg::Open(open),
-                ComposeOutput::Finished(message) => AppMsg::Finished(message),
             });
         let troubleshoot_page =
             TroubleshootPage::builder()
@@ -293,12 +320,14 @@ impl Component for App {
         });
 
         follow_status(&daemon, &sender);
+        follow_activity(&daemon, &sender);
         follow_updates(&daemon, &sender);
         follow_containers(&daemon, &sender);
         start_tray(&sender);
 
         let model = App {
             status: daemon.status(),
+            activity: Activity::default(),
             daemon,
             containers: BTreeMap::new(),
             section: Section::Containers,
@@ -329,6 +358,7 @@ impl Component for App {
             stack,
             card,
             engine_menu,
+            activity,
             toasts,
             banner,
         };
@@ -359,9 +389,9 @@ impl Component for App {
             AppMsg::Engine(action) => {
                 let daemon = self.daemon.clone();
                 sender.oneshot_command(async move {
-                    match daemon.run(action).await {
-                        Ok(()) => AppCmd::Failed(String::new()),
-                        Err(error) => AppCmd::Failed(contr_daemon_ui::describe(&error)),
+                    match daemon.start(action).await {
+                        Ok(_) => AppCmd::Failed(String::new()),
+                        Err(error) => AppCmd::Failed(describe(&error)),
                     }
                 });
             }
@@ -376,11 +406,37 @@ impl Component for App {
                     };
                     match client.containers().restart_container(request).await {
                         Ok(_) => AppCmd::Failed(String::new()),
-                        Err(status) => AppCmd::Failed(contr_daemon_ui::describe(&status.into())),
+                        Err(status) => AppCmd::Failed(describe(&status.into())),
                     }
                 });
             }
             AppMsg::Problems(count) => self.problems = count,
+            AppMsg::CancelOperation(id) => {
+                let Some(client) = self.status.client().cloned() else {
+                    return;
+                };
+                sender.oneshot_command(async move {
+                    match operations::cancel(&client, &id).await {
+                        Ok(()) => AppCmd::Failed(String::new()),
+                        Err(error) => AppCmd::Failed(describe(&error)),
+                    }
+                });
+            }
+            AppMsg::Fix(remediation) => {
+                let Some(client) = self.status.client().cloned() else {
+                    return;
+                };
+                let request = RunRemediationRequest {
+                    action_id: remediation.action_id,
+                };
+                sender.oneshot_command(async move {
+                    match operations::start(&client, Kind::RunRemediation(request)).await {
+                        Ok(_) => AppCmd::Failed(String::new()),
+                        Err(error) => AppCmd::Failed(describe(&error)),
+                    }
+                });
+            }
+            AppMsg::SaveBundle(id) => self.save_bundle(root, &sender, id),
             AppMsg::OpenRelease => {
                 if let Some(notice) = self.notice.take() {
                     gtk::UriLauncher::new(&notice.url).launch(Some(root), gio::Cancellable::NONE, |_| {});
@@ -407,11 +463,6 @@ impl Component for App {
                         content.set_visible_child_name(MAIN_PAGE);
                         content.remove(&page);
                     }
-                }
-            }
-            AppMsg::Finished(message) => {
-                if self.settings.borrow().notify.finished && !root.is_active() {
-                    notifications::finished(&message);
                 }
             }
             AppMsg::Preferences => preferences::present(
@@ -460,6 +511,35 @@ impl Component for App {
                 self.tray_available = true;
             }
             AppCmd::Tray(None) => self.tray_available = false,
+            AppCmd::Activity(activity) => {
+                self.report_finished(&sender, &activity);
+                widgets.activity.show(&activity);
+                self.activity = *activity;
+                // Progress arrives several times a second; nothing else in the window depends on it.
+                return;
+            }
+            AppCmd::Reported {
+                operation,
+                message,
+                claimed,
+            } => {
+                if !claimed {
+                    widgets
+                        .toasts
+                        .add_toast(result_toast(&operation, &message, sender.input_sender()));
+                }
+                if self.settings.borrow().notify.finished && !root.is_active() {
+                    notifications::finished(&message);
+                }
+            }
+            AppCmd::BundleSaved(Ok(path)) => {
+                widgets
+                    .toasts
+                    .add_toast(contr_ui_common::widgets::saved_toast(&widgets.toasts, &path));
+            }
+            AppCmd::Notice(message) | AppCmd::BundleSaved(Err(message)) => {
+                widgets.toasts.add_toast(adw::Toast::new(&message));
+            }
             AppCmd::Failed(message) => {
                 if !message.is_empty() {
                     widgets.toasts.add_toast(adw::Toast::new(&message));
@@ -535,6 +615,50 @@ impl Component for App {
 }
 
 impl App {
+    /// Reports each operation that finished since the activity last changed, reading its events when the report
+    /// needs them.
+    fn report_finished(&self, sender: &ComponentSender<Self>, activity: &Activity) {
+        let Some(client) = self.status.client() else {
+            return;
+        };
+        for operation in operations::finished_since(&self.activity, activity) {
+            let claimed = self.daemon.take_claim(&operation.id);
+            if !operations::reported(operation) {
+                continue;
+            }
+            let client = client.clone();
+            let operation = operation.clone();
+            sender.oneshot_command(async move {
+                let message = operations::report(&client, &operation).await;
+                AppCmd::Reported {
+                    operation: Box::new(operation),
+                    message,
+                    claimed,
+                }
+            });
+        }
+    }
+
+    fn save_bundle(&self, root: &adw::ApplicationWindow, sender: &ComponentSender<Self>, id: String) {
+        let Some(client) = self.status.client().cloned() else {
+            return;
+        };
+        let dialog = gtk::FileDialog::builder()
+            .title("Save Diagnostics Bundle")
+            .initial_name(operations::todays_bundle_name())
+            .build();
+        let out = sender.command_sender().clone();
+        dialog.save(Some(root), gio::Cancellable::NONE, move |result| {
+            let Some(path) = result.ok().and_then(|file| file.path()) else {
+                return;
+            };
+            relm4::spawn(async move {
+                let saved = operations::save_bundle(&client, &id, &path, |_| {}).await;
+                out.emit(AppCmd::BundleSaved(saved.map(|()| path)));
+            });
+        });
+    }
+
     fn update_tray(&mut self) {
         let state = tray_state(&self.status, &self.containers);
         if state == self.tray_state {
@@ -547,6 +671,42 @@ impl App {
             });
         }
     }
+}
+
+/// A toast for `message`, with the next step the operation's end suggests.
+fn result_toast(operation: &Operation, message: &str, input: &relm4::Sender<AppMsg>) -> adw::Toast {
+    let toast = adw::Toast::new(message);
+    let next = match (operation.state(), operations::kind(operation)) {
+        (OperationState::Succeeded, Some(Kind::PullImage(request))) => Some((
+            "Run".to_owned(),
+            AppMsg::Run(RunImage {
+                image: request.reference.clone(),
+            }),
+        )),
+        (OperationState::Succeeded, Some(Kind::CreateBundle(_))) => {
+            Some(("Save…".to_owned(), AppMsg::SaveBundle(operation.id.clone())))
+        }
+        (OperationState::Failed, _) => {
+            toast.set_timeout(10);
+            operation
+                .error
+                .as_ref()
+                .and_then(|error| error.remediations.first())
+                .map(|remediation| (remediation_label(remediation), AppMsg::Fix(remediation.clone())))
+        }
+        _ => None,
+    };
+    if let Some((label, message)) = next {
+        toast.set_button_label(Some(&label));
+        let input = input.clone();
+        let message = std::cell::Cell::new(Some(message));
+        toast.connect_button_clicked(move |_| {
+            if let Some(message) = message.take() {
+                input.emit(message);
+            }
+        });
+    }
+    toast
 }
 
 fn tray_state(status: &Status, containers: &BTreeMap<String, Container>) -> TrayState {
@@ -716,6 +876,38 @@ fn follow_status(daemon: &Daemon, sender: &ComponentSender<App>) {
                     out.emit(AppCmd::Status(Box::new(current)));
                     if status.changed().await.is_err() {
                         return;
+                    }
+                }
+            })
+            .drop_on_shutdown()
+    });
+}
+
+/// Follows the daemon's operations, and the notices pages send about work that outlived them.
+fn follow_activity(daemon: &Daemon, sender: &ComponentSender<App>) {
+    let mut activity = daemon.subscribe_activity();
+    sender.command(move |out, shutdown| {
+        shutdown
+            .register(async move {
+                loop {
+                    out.emit(AppCmd::Activity(Box::new(activity.borrow_and_update().clone())));
+                    if activity.changed().await.is_err() {
+                        return;
+                    }
+                }
+            })
+            .drop_on_shutdown()
+    });
+
+    let mut notices = daemon.subscribe_notices();
+    sender.command(move |out, shutdown| {
+        shutdown
+            .register(async move {
+                loop {
+                    match notices.recv().await {
+                        Ok(message) => out.emit(AppCmd::Notice(message)),
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                     }
                 }
             })

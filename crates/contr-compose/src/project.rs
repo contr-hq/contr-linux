@@ -5,12 +5,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use contr_daemon_ui::operations::{self, Activity, FollowEvent, Kind, Operation};
 use contr_daemon_ui::{Daemon, EngineGate, describe};
 use contr_sdk::Client;
 use contr_sdk::api::compose::v1::{
     Action, Project, RemoveProjectRequest, RunActionRequest, StreamLogsRequest, run_action_response,
 };
 use contr_sdk::api::containers::v1::ContainerState;
+use contr_sdk::api::operations::v1::OperationState;
 use contr_ui_common::palette::SERVICE_COLORS;
 use contr_ui_common::widgets::{GroupHeader, boxed_list, set_status};
 use relm4::adw::{self, prelude::*};
@@ -35,9 +37,14 @@ pub(crate) struct ProjectPage {
     home: PathBuf,
     running_ids: Vec<String>,
     filter: Option<String>,
-    action: Option<Action>,
+    /// The project's running Compose action, whichever client started it.
+    running: Option<Operation>,
+    /// The action this page asked the daemon to start, until the daemon answers.
+    starting: Option<Action>,
+    followed: Option<(String, tokio::task::JoinHandle<()>)>,
     output: Vec<String>,
     logs: Option<tokio::task::JoinHandle<()>>,
+    activity: tokio::task::JoinHandle<()>,
     console: Rc<Console>,
 }
 
@@ -65,15 +72,17 @@ pub(crate) enum ProjectMsg {
 pub(crate) enum ProjectOutput {
     OpenContainer(String),
     Toast(String),
-    /// An action succeeded; carries what to tell the user.
-    Finished(String),
     Forgotten,
 }
 
 #[derive(Debug)]
 pub(crate) enum ProjectCmd {
-    Output(String),
-    Finished(Result<i32, String>),
+    Activity(Box<Activity>),
+    Started(Result<Box<Operation>, String>),
+    /// A line of the followed operation's output.
+    Output(String, String),
+    /// The followed operation in its final state, with the code Compose exited with.
+    Finished(Box<Operation>, Option<i32>),
     Forgot(Result<(), String>),
 }
 
@@ -245,15 +254,28 @@ impl Component for ProjectPage {
             .unwrap_or_else(|| gio::SimpleAction::new("forget", None));
         root.insert_action_group("project", Some(&actions));
 
+        let mut activity = daemon.subscribe_activity();
+        let out = sender.command_sender().clone();
+        let activity = relm4::spawn(async move {
+            loop {
+                out.emit(ProjectCmd::Activity(Box::new(activity.borrow_and_update().clone())));
+                if activity.changed().await.is_err() {
+                    return;
+                }
+            }
+        });
         let mut model = ProjectPage {
             daemon,
             project: Project::default(),
             home: glib::home_dir(),
             running_ids: Vec::new(),
             filter: None,
-            action: None,
+            running: None,
+            starting: None,
+            followed: None,
             output: Vec::new(),
             logs: None,
+            activity,
             console: Rc::new(Console {
                 buffer,
                 view,
@@ -338,22 +360,56 @@ impl Component for ProjectPage {
         root: &Self::Root,
     ) {
         match message {
-            ProjectCmd::Output(line) => {
-                widgets.progress_label.set_label(&line);
-                self.output.push(line);
+            ProjectCmd::Activity(activity) => {
+                let name = &self.project.name;
+                self.running = activity
+                    .running_where(|kind| matches!(kind, Kind::ComposeAction(request) if request.project == *name))
+                    .cloned();
+                if let Some(id) = self.running.as_ref().map(|operation| operation.id.clone()) {
+                    self.follow_action(&sender, id);
+                }
+            }
+            ProjectCmd::Started(Ok(operation)) => {
+                self.starting = None;
+                let id = operation.id.clone();
+                if operation.state() == OperationState::Running {
+                    self.running = Some(*operation);
+                }
+                self.follow_action(&sender, id);
+            }
+            ProjectCmd::Started(Err(message)) => {
+                self.starting = None;
+                widgets.error.set_label(&message);
+                widgets.error.set_visible(true);
+            }
+            ProjectCmd::Output(id, line) => {
+                if self.followed.as_ref().is_some_and(|(followed, _)| *followed == id) {
+                    widgets.progress_label.set_label(&line);
+                    self.output.push(line);
+                }
                 return;
             }
-            ProjectCmd::Finished(result) => {
-                let action = self.action.take();
-                match result {
-                    Ok(0) => {
-                        let _ = sender.output(ProjectOutput::Finished(done_text(action, &self.project.name)));
+            ProjectCmd::Finished(operation, code) => {
+                if self
+                    .followed
+                    .as_ref()
+                    .is_some_and(|(followed, _)| *followed == operation.id)
+                {
+                    self.followed = None;
+                }
+                if self.running.as_ref().is_some_and(|running| running.id == operation.id) {
+                    self.running = None;
+                }
+                let action = compose_action(&operation);
+                match (operation.state(), code, operation.error) {
+                    (OperationState::Failed, Some(code), _) if code != 0 => {
+                        show_failure(root, action, code, &self.output);
                     }
-                    Ok(code) => show_failure(root, action, code, &self.output),
-                    Err(message) => {
-                        widgets.error.set_label(&message);
+                    (OperationState::Failed, _, Some(error)) => {
+                        widgets.error.set_label(&error.message);
                         widgets.error.set_visible(true);
                     }
+                    _ => {}
                 }
             }
             ProjectCmd::Forgot(Ok(())) => {
@@ -367,7 +423,11 @@ impl Component for ProjectPage {
     }
 
     fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<ProjectOutput>) {
-        if let Some(task) = self.logs.take() {
+        self.activity.abort();
+        for task in [self.logs.take(), self.followed.take().map(|(_, task)| task)]
+            .into_iter()
+            .flatten()
+        {
             task.abort();
         }
     }
@@ -423,8 +483,13 @@ impl ProjectPage {
         self.show_state(widgets);
     }
 
+    /// The action running for the project, or the one this page is starting.
+    fn action(&self) -> Option<Action> {
+        self.running.as_ref().and_then(compose_action).or(self.starting)
+    }
+
     fn show_state(&self, widgets: &ProjectWidgets) {
-        let busy = self.action.is_some();
+        let busy = self.action().is_some();
         let has_files = !self.project.config_files.is_empty() && self.project.config_error.is_empty();
         for (action, button) in &widgets.buttons {
             let needs_files = matches!(action, Action::Up | Action::Pull);
@@ -432,7 +497,7 @@ impl ProjectPage {
         }
         widgets.down.set_sensitive(!busy);
         widgets.progress.set_visible(busy);
-        if let Some(action) = self.action
+        if let Some(action) = self.action()
             && self.output.is_empty()
         {
             widgets
@@ -443,10 +508,10 @@ impl ProjectPage {
 
     fn run(&mut self, sender: &ComponentSender<Self>, action: Action, services: Vec<String>, remove_volumes: bool) {
         let Some(client) = self.client() else { return };
-        if self.action.is_some() {
+        if self.action().is_some() {
             return;
         }
-        self.action = Some(action);
+        self.starting = Some(action);
         self.output.clear();
         let request = RunActionRequest {
             project: self.project.name.clone(),
@@ -454,22 +519,42 @@ impl ProjectPage {
             services,
             remove_volumes,
         };
-        let out = sender.command_sender().clone();
-        relm4::spawn(async move {
-            let result = async {
-                let mut stream = client.compose().run_action(request).await?.into_inner();
-                while let Some(response) = stream.message().await? {
-                    match response.event {
-                        Some(run_action_response::Event::Output(line)) => out.emit(ProjectCmd::Output(line)),
-                        Some(run_action_response::Event::ExitCode(code)) => return Ok(code),
-                        None => {}
-                    }
-                }
-                Err(contr_sdk::Error::Protocol("Compose ended without an exit code"))
-            }
-            .await;
-            out.emit(ProjectCmd::Finished(result.map_err(|error| describe(&error))));
+        sender.oneshot_command(async move {
+            let started = operations::start(&client, Kind::ComposeAction(request)).await;
+            ProjectCmd::Started(started.map(Box::new).map_err(|error| describe(&error)))
         });
+    }
+
+    /// Shows the output of operation `id` from its start, until it finishes.
+    fn follow_action(&mut self, sender: &ComponentSender<Self>, id: String) {
+        if self.followed.as_ref().is_some_and(|(followed, _)| *followed == id) {
+            return;
+        }
+        if let Some((_, task)) = self.followed.take() {
+            task.abort();
+        }
+        let Some(client) = self.client() else { return };
+        self.output.clear();
+        let out = sender.command_sender().clone();
+        let followed = id.clone();
+        let task = relm4::spawn(async move {
+            let mut exit_code = None;
+            let finished = operations::follow(&client, &id, |event| {
+                let FollowEvent::ComposeAction(response) = event else {
+                    return;
+                };
+                match response.event {
+                    Some(run_action_response::Event::Output(line)) => out.emit(ProjectCmd::Output(id.clone(), line)),
+                    Some(run_action_response::Event::ExitCode(code)) => exit_code = Some(code),
+                    None => {}
+                }
+            })
+            .await;
+            if let Ok(operation) = finished {
+                out.emit(ProjectCmd::Finished(Box::new(operation), exit_code));
+            }
+        });
+        self.followed = Some((followed, task));
     }
 
     fn follow_logs(&mut self) {
@@ -565,15 +650,10 @@ fn verb(action: Action) -> &'static str {
     }
 }
 
-fn done_text(action: Option<Action>, project: &str) -> String {
-    match action {
-        Some(Action::Up) => format!("{project} is up"),
-        Some(Action::Pull) => format!("Pulled the images of {project}"),
-        Some(Action::Stop) => format!("Stopped {project}"),
-        Some(Action::Start) => format!("Started {project}"),
-        Some(Action::Restart) => format!("Restarted {project}"),
-        Some(Action::Down) => format!("Took {project} down"),
-        Some(Action::Unspecified) | None => String::new(),
+fn compose_action(operation: &Operation) -> Option<Action> {
+    match operations::kind(operation) {
+        Some(Kind::ComposeAction(request)) => Some(request.action()),
+        _ => None,
     }
 }
 

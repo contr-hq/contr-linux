@@ -4,13 +4,14 @@
 mod attachments;
 mod daemon;
 mod gate;
+pub mod operations;
 mod remediation;
 mod settings;
 
 pub use attachments::{Attachment, engine_kind, engine_name, follow_attachments};
 pub use daemon::{Daemon, EngineAction, Link, Status, while_running};
 pub use gate::{EngineGate, TROUBLESHOOT_ACTION};
-pub use remediation::{remediation_label, run_remediation};
+pub use remediation::remediation_label;
 pub use settings::{SettingsHandle, field_mask};
 
 use std::time::{Duration, SystemTime};
@@ -31,26 +32,5 @@ pub fn describe(error: &contr_sdk::Error) -> String {
     match error {
         contr_sdk::Error::Rpc(status) => status.message().to_owned(),
         other => other.to_string(),
-    }
-}
-
-/// What to tell the user about a failed call; `None` when they dismissed a prompt it needed, since nothing changed.
-pub fn failure(error: &contr_sdk::Error) -> Option<String> {
-    match error {
-        contr_sdk::Error::Dismissed(_) => None,
-        other => Some(describe(other)),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_dismissed_prompt_needs_no_message() {
-        let dismissed = contr_sdk::Error::from(tonic::Status::cancelled("join-docker-group did not run"));
-        assert_eq!(failure(&dismissed), None);
-        let refused = contr_sdk::Error::from(tonic::Status::failed_precondition("pkexec failed: Not authorized"));
-        assert_eq!(failure(&refused).as_deref(), Some("pkexec failed: Not authorized"));
     }
 }

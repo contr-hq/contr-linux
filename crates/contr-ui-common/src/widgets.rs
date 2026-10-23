@@ -1,7 +1,9 @@
 //! Small widgets the design repeats across pages: status icons, group headers and the page clamp.
 
+use std::path::Path;
+
 use relm4::adw;
-use relm4::gtk::{self, prelude::*};
+use relm4::gtk::{self, gio, prelude::*};
 
 /// How a container or check is doing, as the design colours it; every icon also carries its word as a tooltip.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,4 +145,25 @@ pub fn page_column(child: &impl IsA<gtk::Widget>) -> gtk::ScrolledWindow {
         .vexpand(true)
         .child(&clamp)
         .build()
+}
+
+/// A toast that names the file saved at `path` and opens its folder; `parent` places the file manager's window.
+pub fn saved_toast(parent: &impl IsA<gtk::Widget>, path: &Path) -> adw::Toast {
+    let name = path
+        .file_name()
+        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+    let toast = adw::Toast::builder()
+        .title(format!("Saved {name}"))
+        .button_label("Show in Files")
+        .build();
+    let parent = parent.clone().upcast::<gtk::Widget>();
+    let file = gio::File::for_path(path);
+    toast.connect_button_clicked(move |_| {
+        gtk::FileLauncher::new(Some(&file)).open_containing_folder(
+            parent.root().and_downcast_ref::<gtk::Window>(),
+            gio::Cancellable::NONE,
+            |_| {},
+        );
+    });
+    toast
 }

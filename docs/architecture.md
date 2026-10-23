@@ -24,8 +24,8 @@ depends on `contr-desktop`.
 starts the daemon's systemd user unit (or `contrd` itself) when nothing answers and `CONTR_HOST` is unset, then follows
 `EngineService.WatchState`. When the connection or the watch breaks it reconnects three seconds later. Every change is
 published as a `Status` on a `tokio::sync::watch` channel: the link, the handshake (backend and capabilities), the
-engine state and failure reason, `GetInfo`'s engine description while the engine runs, and the engine operation this
-client is running with its progress.
+engine state and failure reason, `GetInfo`'s engine description while the engine runs, and the running engine
+operation with its progress, whichever client started it.
 
 Pages follow the engine with `while_running`, which calls a page's stream body with a client each time the engine
 runs and drops it when the engine leaves `Running` or the connection changes. Every engine RPC fails with
@@ -34,6 +34,26 @@ runs and drops it when the engine leaves `Running` or the connection changes. Ev
 `EngineGate::around` wraps a page's content in a stack that shows the content while the engine runs and the gate
 otherwise: the stopped, starting, failed and unreachable states, the Start Engine button, and the "start the engine
 when I log in" setting (`engine.start_with_daemon`).
+
+## Operations
+
+Pulls, pushes, Compose actions, image imports, diagnostics bundles, fixes and engine start, stop, restart and reset run
+as operations the daemon owns (`OperationsService`), so they go on when a page closes, the window closes or the client
+quits. `Daemon` follows `WatchOperations` while connected, starting over after each reconnect, and publishes the
+`Activity`, every operation the daemon keeps, newest first. Pages start work with `StartOperation`, take their busy
+state from the activity, and follow their own subject's operation with `FollowOperation`, which replays the events the
+daemon kept; a page opened again, or a client started again, shows the progress of work already running.
+
+The shell reports each operation that finishes in one toast overlay, with the next step where there is one: Run for a
+pulled image, Save… for a bundle, and the first remediation for a failure. It sends a desktop notification as well
+while the window is not in front and `notify.finished` is on (the default). A page that tells the user the result
+itself, as the bundle's save and onboarding's fixes do, claims the operation so the shell leaves it out. Work that is
+not an operation but should finish after its page closes, such as a container action from the container page, runs on
+its own task and reports through `Daemon::notice`.
+
+The activity button in the sidebar header lists the running and recent operations with their progress, Cancel where
+the daemon allows it, the remediations of a failure, and Save… for a finished bundle, which replays the bundle's
+chunks into the file a save dialog names.
 
 ## Threads
 
@@ -59,14 +79,15 @@ shell's stdin on disconnect, since the engine keeps an exec running after its cl
 
 `contr-images` follows `WatchImages`, and `WatchContainers` to name the containers that use each image. Images that no
 container uses, untagged ones included, can be removed together with `PruneImages`. A pull streams `PullImage` into a
-card with the overall bytes and estimate and a line per layer; cancelling drops the call, which cancels the pull. Tag…
-calls `TagImage`, and Push streams `PushImage` into a card with the engine's latest status line, since a push reports no
+card with the overall bytes and estimate and a line per layer, for every pull the daemon runs; Cancel calls
+`CancelOperation`. Tag… calls `TagImage`, and Push shows the engine's latest status line, since a push reports no
 per-layer progress; a registry that refuses the push names the `docker login` to run, because pulls and pushes use the
 credentials the Docker CLI stores.
 
 The Run dialog belongs to the containers module and is reached from other modules through `RunImage`. It inspects the
 image to offer the ports it exposes, picks host ports that no container publishes and `CheckHostPorts` reports free,
 publishes them on 127.0.0.1, and calls `CreateContainer` with `start`, pulling first when the image is not local.
+Cancel during that pull cancels it when the dialog started it, and nothing is created.
 
 ## Volumes and networks
 
@@ -79,8 +100,8 @@ member disconnects through `DisconnectNetwork`.
 ## Compose
 
 `contr-compose` follows `ComposeService.WatchProjects`, which sends every project after each change, and forwards the
-open project to its page. A project page runs `RunAction` for Up, Pull, Restart, Stop and Down, showing Compose's
-output lines while it runs and its last lines in a dialog when it fails. Logs follow the project's `StreamLogs`,
+open project to its page. A project page starts Up, Pull, Restart, Stop and Down as operations, one at a time per
+project, showing Compose's output lines while one runs and its last lines in a dialog when it fails. Logs follow the project's `StreamLogs`,
 filtered by service, and restart when the set of running containers changes.
 
 ## Kubernetes
@@ -90,18 +111,19 @@ The Enabled switch, Version and Traefik are the settings `kubernetes.enabled`, `
 `kubernetes.traefik`; Cancel during start-up turns `kubernetes.enabled` off. After `UpdateSettings` the page keeps the
 change pending until a cluster state carries the returned etag or a later one. A version change deletes the cluster's
 data, so it asks first, as Reset does. The kubectl context switch calls `SetCurrentContext`, and Import Images
-streams `ImportImages` for the tagged images the engine holds. The sidebar shows a dot while the cluster is ready and
+starts an import operation for the tagged images the engine holds. The sidebar shows a dot while the cluster is ready and
 a spinner while it starts or stops, and a notification says when a start finishes while the window is not focused.
 
 ## Troubleshoot
 
 `contr-troubleshoot` runs `DiagnosticsService.RunChecks` once a client exists and again whenever the connection or the
 engine state changes. Its alert leads with an unreachable daemon, then a failed engine and its `ErrorReason`, then the
-first failing check, and offers the remediations of the failing checks through `RunRemediation`. A remediation whose
-outcome needs a new login offers to log out through `org.gnome.SessionManager`. Logs come from `journalctl -o json`:
+first failing check, and offers the remediations of the failing checks as operations. A fix that succeeds, from any
+client, runs the checks again, and one whose outcome needs a new login offers to log out through
+`org.gnome.SessionManager`. Logs come from `journalctl -o json`:
 the daemon's user unit, falling back to the log file in the runtime directory, or the engine's unit. Create diagnostics
-bundle streams `CreateBundle` into a temporary file and copies it to the file a save dialog names once the stream
-ends.
+bundle asks where to save it, starts the bundle operation and writes its chunks to that file once the bundle is whole.
+Reset Engine starts the factory reset as an engine operation.
 
 ## Updates
 
@@ -117,8 +139,8 @@ Until the user finishes or skips it (`onboarded` in `desktop.json`), the window 
 sections. It shows the one engine the daemon manages, since no RPC lists the other engines on the computer, so there
 is nothing to choose between yet. The fixes come from the failing checks of `RunChecks`: installing an engine gets its
 own row, and the rest sit under the engine, with a warning before joining the docker group. A running fix shows the
-steps `RunRemediation` reports; one that needs a new session ends on a page that logs out through
-`org.gnome.SessionManager`. `contr_daemon_ui::run_remediation` and `contr_ui_common::session` serve Troubleshoot too.
+steps its operation reports; one that needs a new session ends on a page that logs out through
+`org.gnome.SessionManager`, which `contr_ui_common::session` serves to Troubleshoot too.
 
 ## Capabilities
 
@@ -149,6 +171,6 @@ process's resources.
 
 "Start Contr when I log in" writes an XDG autostart entry that passes `--background`, which skips presenting the
 window once. Notifications go through `GApplication`: a container that exits with a non-zero code, with buttons that
-open its logs or restart it, and finished pulls and Compose runs. Preferences edits the daemon's settings through
+open its logs or restart it, and finished operations. Preferences edits the daemon's settings through
 `UpdateSettings` with a field mask; settings the administrator locked show as managed, and engine configuration
 needs `CAPABILITY_ENGINE_CONFIGURATION`.

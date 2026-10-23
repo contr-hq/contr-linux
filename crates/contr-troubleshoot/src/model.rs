@@ -1,20 +1,10 @@
 //! What Troubleshoot shows: check results, the problem they add up to, and the fixes the daemon offers.
 
-use contr_core::product;
 use contr_daemon_ui::{Link, Status};
 use contr_sdk::api::common::v1::{ErrorReason, Remediation};
 use contr_sdk::api::diagnostics::v1::{Check, CheckStatus};
 use contr_sdk::api::engine::v1::EngineState;
 use contr_ui_common::widgets::StatusKind;
-
-/// File name the save dialog suggests for a diagnostics bundle made on `date`, such as `contr-diagnostics-2026-10-22.zip`.
-pub(crate) fn bundle_name(date: &str) -> String {
-    if date.is_empty() {
-        format!("{}-diagnostics.zip", product::SLUG)
-    } else {
-        format!("{}-diagnostics-{date}.zip", product::SLUG)
-    }
-}
 
 pub(crate) fn check_status(check: &Check) -> (StatusKind, &'static str) {
     match check.status() {
@@ -190,14 +180,6 @@ mod tests {
             "Add Me to the docker Group…"
         );
         assert_eq!(problem_count(&status, &checks), 2);
-    }
-
-    #[test]
-    fn bundles_are_named_by_date() {
-        assert_eq!(
-            bundle_name("2026-10-22"),
-            format!("{}-diagnostics-2026-10-22.zip", product::SLUG)
-        );
     }
 
     #[test]

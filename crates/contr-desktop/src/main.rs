@@ -1,5 +1,6 @@
 //! Contr for Linux: the GTK4 and libadwaita client of the Contr daemon.
 
+mod activity;
 mod app;
 mod autostart;
 mod client_settings;

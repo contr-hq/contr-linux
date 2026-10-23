@@ -38,7 +38,7 @@ impl Default for ClientSettings {
 #[serde(default, rename_all = "snake_case")]
 pub(crate) struct Notify {
     pub(crate) container_errors: bool,
-    /// Pulls and Compose runs.
+    /// Pulls, pushes, Compose actions and the other work the daemon runs as operations.
     pub(crate) finished: bool,
 }
 
@@ -46,7 +46,7 @@ impl Default for Notify {
     fn default() -> Self {
         Self {
             container_errors: true,
-            finished: false,
+            finished: true,
         }
     }
 }

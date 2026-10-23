@@ -52,11 +52,6 @@ pub(crate) enum ContainerPageOutput {
     Toast(String),
 }
 
-#[derive(Debug)]
-pub(crate) enum ContainerPageCmd {
-    Done(Result<String, String>),
-}
-
 pub(crate) struct ContainerPageWidgets {
     tabs: adw::ToggleGroup,
     title: gtk::Label,
@@ -94,7 +89,7 @@ fn tab_name(tab: ContainerTab) -> &'static str {
 }
 
 impl Component for ContainerPage {
-    type CommandOutput = ContainerPageCmd;
+    type CommandOutput = ();
     type Input = ContainerPageMsg;
     type Output = ContainerPageOutput;
     type Init = ContainerPageInit;
@@ -291,14 +286,14 @@ impl Component for ContainerPage {
                 self.apply(widgets, changed);
             }
             ContainerPageMsg::Show(tab) => widgets.tabs.set_active_name(Some(tab_name(tab))),
-            ContainerPageMsg::Start => self.call(&sender, |client, id| async move {
+            ContainerPageMsg::Start => self.call(|client, id| async move {
                 client
                     .containers()
                     .start_container(StartContainerRequest { id })
                     .await?;
                 Ok(String::new())
             }),
-            ContainerPageMsg::Stop => self.call(&sender, |client, id| async move {
+            ContainerPageMsg::Stop => self.call(|client, id| async move {
                 let request = StopContainerRequest {
                     id,
                     timeout_seconds: None,
@@ -306,7 +301,7 @@ impl Component for ContainerPage {
                 client.containers().stop_container(request).await?;
                 Ok(String::new())
             }),
-            ContainerPageMsg::Restart => self.call(&sender, |client, id| async move {
+            ContainerPageMsg::Restart => self.call(|client, id| async move {
                 let request = RestartContainerRequest {
                     id,
                     timeout_seconds: None,
@@ -314,14 +309,14 @@ impl Component for ContainerPage {
                 client.containers().restart_container(request).await?;
                 Ok(String::new())
             }),
-            ContainerPageMsg::Pause => self.call(&sender, |client, id| async move {
+            ContainerPageMsg::Pause => self.call(|client, id| async move {
                 client
                     .containers()
                     .pause_container(PauseContainerRequest { id })
                     .await?;
                 Ok(String::new())
             }),
-            ContainerPageMsg::Resume => self.call(&sender, |client, id| async move {
+            ContainerPageMsg::Resume => self.call(|client, id| async move {
                 client
                     .containers()
                     .unpause_container(UnpauseContainerRequest { id })
@@ -331,7 +326,7 @@ impl Component for ContainerPage {
             ContainerPageMsg::Delete => confirm_delete(root, &self.container, sender.input_sender()),
             ContainerPageMsg::ConfirmDelete(remove_volumes) => {
                 let name = model::name(&self.container);
-                self.call(&sender, move |client, id| async move {
+                self.call(move |client, id| async move {
                     let request = RemoveContainerRequest {
                         id,
                         force: true,
@@ -342,7 +337,7 @@ impl Component for ContainerPage {
                 });
             }
             ContainerPageMsg::Rename => rename(root, &model::name(&self.container), sender.input_sender()),
-            ContainerPageMsg::ConfirmRename(name) => self.call(&sender, move |client, id| async move {
+            ContainerPageMsg::ConfirmRename(name) => self.call(move |client, id| async move {
                 client
                     .containers()
                     .rename_container(RenameContainerRequest { id, name: name.clone() })
@@ -360,15 +355,6 @@ impl Component for ContainerPage {
         widgets.logs.stop();
         widgets.stats.stop();
         widgets.terminal.stop();
-    }
-
-    fn update_cmd(&mut self, message: ContainerPageCmd, sender: ComponentSender<Self>, _root: &Self::Root) {
-        let ContainerPageCmd::Done(result) = message;
-        let message = match result {
-            Ok(message) if message.is_empty() => return,
-            Ok(message) | Err(message) => message,
-        };
-        let _ = sender.output(ContainerPageOutput::Toast(message));
     }
 }
 
@@ -451,7 +437,8 @@ impl ContainerPage {
         }
     }
 
-    fn call<F, Fut>(&self, sender: &ComponentSender<Self>, call: F)
+    /// Runs `call` on its own task, so it finishes after the page closes; its message goes to the window's toasts.
+    fn call<F, Fut>(&self, call: F)
     where
         F: FnOnce(Client, String) -> Fut + Send + 'static,
         Fut: Future<Output = Result<String, Error>> + Send,
@@ -460,8 +447,13 @@ impl ContainerPage {
             return;
         };
         let id = self.container.id.clone();
-        sender.oneshot_command(async move {
-            ContainerPageCmd::Done(call(client, id).await.map_err(|error| describe(&error)))
+        let daemon = self.daemon.clone();
+        relm4::spawn(async move {
+            match call(client, id).await {
+                Ok(message) if message.is_empty() => {}
+                Ok(message) => daemon.notice(message),
+                Err(error) => daemon.notice(describe(&error)),
+            }
         });
     }
 }

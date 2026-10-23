@@ -68,27 +68,6 @@ pub(crate) fn split_reference(reference: &str) -> (String, String) {
     }
 }
 
-/// A push or pull failed because the registry wants credentials `docker login` stores.
-pub(crate) fn needs_login(message: &str) -> bool {
-    let message = message.to_lowercase();
-    [
-        "no basic auth credentials",
-        "unauthorized",
-        "authentication required",
-        "denied",
-    ]
-    .iter()
-    .any(|sign| message.contains(sign))
-}
-
-/// `docker login registry.corp` for the registry `reference` names, or `docker login` for Docker Hub.
-pub(crate) fn login_command(reference: &str) -> String {
-    match reference.split_once('/') {
-        Some((host, _)) if host.contains(['.', ':']) || host == "localhost" => format!("docker login {host}"),
-        _ => "docker login".to_owned(),
-    }
-}
-
 fn tags(image: &Image) -> Vec<&str> {
     image
         .repo_tags
@@ -341,17 +320,5 @@ mod tests {
         let (fraction, text) = pull_summary(&layers, Duration::from_secs(10));
         assert!((fraction - 87.0 / 141.0).abs() < 1e-9);
         assert_eq!(text, "87 of 141 MB · about 6 seconds left");
-    }
-
-    #[test]
-    fn registry_errors_point_at_docker_login() {
-        assert!(needs_login("push access denied: no basic auth credentials"));
-        assert!(!needs_login("manifest unknown"));
-        assert_eq!(
-            login_command("registry.corp/team/app:1.2"),
-            "docker login registry.corp"
-        );
-        assert_eq!(login_command("localhost/app"), "docker login localhost");
-        assert_eq!(login_command("minh/app:1.0"), "docker login");
     }
 }
