@@ -55,7 +55,7 @@ overrides:
   # The deb is built on Ubuntu 26.04 and the rpm on Fedora 44; see .github/workflows/release.yml.
   deb:
     depends:
-      - contr-daemon (>= 0.1.0~)
+      - contr-daemon (>= 0.1.0~alpha.3)
       - libc6 (>= 2.43)
       - libgtk-4-1 (>= 4.20)
       - libadwaita-1-0 (>= 1.8)
@@ -63,7 +63,7 @@ overrides:
     suggests: [gnome-shell-extension-appindicator]
   rpm:
     depends:
-      - contr-daemon >= 0.1.0~
+      - contr-daemon >= 0.1.0~alpha.3
       - glibc >= 2.43
       - gtk4 >= 4.20
       - libadwaita >= 1.8
