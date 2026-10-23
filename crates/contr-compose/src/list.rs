@@ -29,15 +29,12 @@ pub enum ComposeMsg {
     DetailClosed,
     OpenContainer(String),
     Toast(String),
-    Finished(String),
     Forgotten,
 }
 
 #[derive(Debug)]
 pub enum ComposeOutput {
     OpenContainer(OpenContainer),
-    /// A Compose run finished; carries what to tell the user.
-    Finished(String),
 }
 
 #[doc(hidden)]
@@ -190,10 +187,6 @@ impl Component for ComposePage {
                 }));
             }
             ComposeMsg::Toast(message) => root.add_toast(adw::Toast::new(&message)),
-            ComposeMsg::Finished(message) => {
-                root.add_toast(adw::Toast::new(&message));
-                let _ = sender.output(ComposeOutput::Finished(message));
-            }
             ComposeMsg::Forgotten => {
                 widgets.nav.pop_to_tag("compose");
                 self.detail = None;
@@ -276,7 +269,6 @@ impl ComposePage {
             .forward(sender.input_sender(), |output| match output {
                 ProjectOutput::OpenContainer(id) => ComposeMsg::OpenContainer(id),
                 ProjectOutput::Toast(message) => ComposeMsg::Toast(message),
-                ProjectOutput::Finished(message) => ComposeMsg::Finished(message),
                 ProjectOutput::Forgotten => ComposeMsg::Forgotten,
             });
         widgets.nav.push(detail.widget());

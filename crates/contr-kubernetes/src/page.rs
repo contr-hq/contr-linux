@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+use contr_daemon_ui::operations::{self, Kind};
 use contr_daemon_ui::{Daemon, EngineGate, SettingsHandle, Status, describe, while_running};
 use contr_sdk::api::images::v1::ListImagesRequest;
 use contr_sdk::api::kubernetes::v1::{
@@ -452,29 +453,10 @@ impl Component for KubernetesPage {
                     )
                 });
             }
-            KubernetesMsg::ImportImages(images) => {
-                let count = images.len();
-                self.call(&sender, move |client| async move {
-                    let mut stream = client
-                        .kubernetes()
-                        .import_images(ImportImagesRequest { images })
-                        .await?
-                        .into_inner();
-                    let mut failed = Vec::new();
-                    while let Some(response) = stream.message().await? {
-                        if !response.error.is_empty() {
-                            failed.push(format!("{}: {}", response.image, response.error));
-                        }
-                    }
-                    Ok(match failed.as_slice() {
-                        [] if count == 1 => "Imported 1 image".to_owned(),
-                        [] => format!("Imported {count} images"),
-                        [one] => format!("Couldn’t import {one}"),
-                        many => format!("Couldn’t import {} images", many.len()),
-                    })
-                });
-                root.add_toast(adw::Toast::new("Importing images…"));
-            }
+            KubernetesMsg::ImportImages(images) => self.call(&sender, move |client| async move {
+                operations::start(&client, Kind::ImportImages(ImportImagesRequest { images })).await?;
+                Ok(String::new())
+            }),
             KubernetesMsg::Reset => confirm(
                 root,
                 input,

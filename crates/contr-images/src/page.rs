@@ -1,12 +1,13 @@
-use std::collections::BTreeMap;
-use std::time::{Instant, SystemTime};
+use std::collections::{BTreeMap, HashMap};
+use std::time::SystemTime;
 
 use contr_containers_api::{ContainerTab, OpenContainer, RunImage};
+use contr_daemon_ui::operations::{self, Activity, FollowEvent, Kind, Operation};
 use contr_daemon_ui::{Daemon, EngineGate, Status, describe, system_time, while_running};
 use contr_sdk::api::containers::v1::{Container, WatchContainersRequest, watch_containers_response};
 use contr_sdk::api::images::v1::{
     Image, LayerProgress, PruneImagesRequest, PullImageRequest, PushImageRequest, RemoveImageRequest, TagImageRequest,
-    WatchImagesRequest, pull_image_response, push_image_response, watch_images_response,
+    WatchImagesRequest, pull_image_response, watch_images_response,
 };
 use contr_sdk::{Client, Error};
 use contr_ui_common::format;
@@ -26,26 +27,10 @@ pub struct ImagesPage {
     query: String,
     sort: Sort,
     show_all: bool,
-    pulls: Vec<Pull>,
-    pushes: Vec<Push>,
-    /// The ID of the next pull or push.
-    next_pull: u64,
-}
-
-/// A push in progress; the engine reports no per-layer progress for it, only status lines.
-struct Push {
-    id: u64,
-    reference: String,
-    status: String,
-    task: tokio::task::JoinHandle<()>,
-}
-
-struct Pull {
-    id: u64,
-    reference: String,
-    layers: Vec<LayerProgress>,
-    started: Instant,
-    task: tokio::task::JoinHandle<()>,
+    /// The daemon's operations; running pulls and pushes show as cards.
+    activity: Activity,
+    /// The layers of each running pull this page follows, by operation ID.
+    layers: HashMap<String, Vec<LayerProgress>>,
 }
 
 #[derive(Debug)]
@@ -54,16 +39,22 @@ pub enum ImagesMsg {
     Sort(Sort),
     AskPull,
     Pull(String),
-    CancelPull(u64),
+    /// Cancels the pull or push operation with this ID.
+    Cancel(String),
     Run(String),
     Open(String),
     Remove(String),
-    ConfirmRemove { reference: String, force: bool },
+    ConfirmRemove {
+        reference: String,
+        force: bool,
+    },
     Copy(String),
     AskTag(String),
-    Tag { source: String, target: String },
+    Tag {
+        source: String,
+        target: String,
+    },
     Push(String),
-    CancelPush(u64),
     Prune,
     ConfirmPrune,
     ShowAll,
@@ -73,8 +64,6 @@ pub enum ImagesMsg {
 pub enum ImagesOutput {
     OpenContainer(OpenContainer),
     Run(RunImage),
-    /// A pull finished; carries the reference.
-    Pulled(String),
 }
 
 #[doc(hidden)]
@@ -83,11 +72,9 @@ pub enum ImagesCmd {
     Status(Box<Status>),
     Images(ImageEvent),
     Containers(ContainerEvent),
-    PullLayer(u64, LayerProgress),
-    PullDone(u64, Result<String, String>),
+    Activity(Box<Activity>),
+    PullLayer(String, LayerProgress),
     Tagged(String),
-    PushStatus(u64, String),
-    PushDone(u64, Result<String, String>),
     Done(Result<String, String>),
 }
 
@@ -257,9 +244,8 @@ impl Component for ImagesPage {
             query: String::new(),
             sort: Sort::default(),
             show_all: false,
-            pulls: Vec::new(),
-            pushes: Vec::new(),
-            next_pull: 0,
+            activity: Activity::default(),
+            layers: HashMap::new(),
         };
         let widgets = ImagesWidgets {
             title,
@@ -292,13 +278,10 @@ impl Component for ImagesPage {
             ImagesMsg::Sort(sort) => self.sort = sort,
             ImagesMsg::AskPull => ask_pull(root, sender.input_sender()),
             ImagesMsg::Pull(reference) => self.pull(&sender, reference),
-            ImagesMsg::CancelPull(id) => {
-                if let Some(index) = self.pulls.iter().position(|pull| pull.id == id) {
-                    let pull = self.pulls.remove(index);
-                    pull.task.abort();
-                    root.add_toast(adw::Toast::new(&format!("Stopped pulling {}", pull.reference)));
-                }
-            }
+            ImagesMsg::Cancel(id) => self.call(&sender, move |client| async move {
+                operations::cancel(&client, &id).await?;
+                Ok(String::new())
+            }),
             ImagesMsg::Run(reference) => {
                 let _ = sender.output(ImagesOutput::Run(RunImage { image: reference }));
             }
@@ -352,14 +335,10 @@ impl Component for ImagesPage {
                     }
                 });
             }
-            ImagesMsg::Push(reference) => self.push(&sender, reference),
-            ImagesMsg::CancelPush(id) => {
-                if let Some(index) = self.pushes.iter().position(|push| push.id == id) {
-                    let push = self.pushes.remove(index);
-                    push.task.abort();
-                    root.add_toast(adw::Toast::new(&format!("Stopped pushing {}", push.reference)));
-                }
-            }
+            ImagesMsg::Push(reference) => self.call(&sender, move |client| async move {
+                operations::start(&client, Kind::PushImage(PushImageRequest { reference })).await?;
+                Ok(String::new())
+            }),
             ImagesMsg::Prune => confirm_prune(root, sender.input_sender()),
             ImagesMsg::ConfirmPrune => self.call(&sender, |client| async move {
                 let response = client
@@ -415,44 +394,39 @@ impl Component for ImagesPage {
             ImagesCmd::Containers(ContainerEvent::Removed(id)) => {
                 self.containers.remove(&id);
             }
+            ImagesCmd::Activity(activity) => {
+                self.activity = *activity;
+                let running: Vec<String> = self
+                    .activity
+                    .running()
+                    .filter(|operation| matches!(operations::kind(operation), Some(Kind::PullImage(_))))
+                    .map(|operation| operation.id.clone())
+                    .collect();
+                self.layers.retain(|id, _| running.contains(id));
+                for id in running {
+                    if !self.layers.contains_key(&id) {
+                        self.layers.insert(id.clone(), Vec::new());
+                        self.follow_pull(&sender, id);
+                    }
+                }
+            }
             ImagesCmd::PullLayer(id, layer) => {
                 // The engine reports "Pulling from <repository>" under the tag's name, not a layer's.
                 if layer.status.starts_with("Pulling from") {
                     return;
                 }
-                if let Some(pull) = self.pulls.iter_mut().find(|pull| pull.id == id) {
-                    match pull.layers.iter_mut().find(|known| known.layer_id == layer.layer_id) {
+                if let Some(layers) = self.layers.get_mut(&id) {
+                    match layers.iter_mut().find(|known| known.layer_id == layer.layer_id) {
                         Some(known) => {
                             let total = known.total_bytes.max(layer.total_bytes);
                             *known = layer;
                             known.total_bytes = total;
                         }
-                        None => pull.layers.push(layer),
+                        None => layers.push(layer),
                     }
                 }
                 self.refresh_pulls(widgets, &sender);
                 return;
-            }
-            ImagesCmd::PullDone(id, result) => {
-                let reference = self
-                    .pulls
-                    .iter()
-                    .position(|pull| pull.id == id)
-                    .map(|index| self.pulls.remove(index).reference);
-                match (result, reference) {
-                    (Ok(_), Some(reference)) => {
-                        let _ = sender.output(ImagesOutput::Pulled(reference.clone()));
-                        let toast = adw::Toast::builder()
-                            .title(format!("Pulled {reference}"))
-                            .button_label("Run")
-                            .build();
-                        let input = sender.input_sender().clone();
-                        toast.connect_button_clicked(move |_| input.emit(ImagesMsg::Run(reference.clone())));
-                        root.add_toast(toast);
-                    }
-                    (Err(message), _) => root.add_toast(adw::Toast::new(&message)),
-                    (Ok(_), None) => {}
-                }
             }
             ImagesCmd::Tagged(target) => {
                 let toast = adw::Toast::builder()
@@ -462,41 +436,6 @@ impl Component for ImagesPage {
                 let input = sender.input_sender().clone();
                 toast.connect_button_clicked(move |_| input.emit(ImagesMsg::Push(target.clone())));
                 root.add_toast(toast);
-            }
-            ImagesCmd::PushStatus(id, status) => {
-                if let Some(push) = self.pushes.iter_mut().find(|push| push.id == id) {
-                    push.status = status;
-                }
-            }
-            ImagesCmd::PushDone(id, result) => {
-                let reference = self
-                    .pushes
-                    .iter()
-                    .position(|push| push.id == id)
-                    .map(|index| self.pushes.remove(index).reference);
-                match (result, reference) {
-                    (Ok(digest), Some(reference)) => {
-                        let title = if digest.is_empty() {
-                            format!("Pushed {reference}")
-                        } else {
-                            format!("Pushed {reference} ({})", format::short_id(&digest))
-                        };
-                        root.add_toast(adw::Toast::new(&title));
-                    }
-                    (Err(message), Some(reference)) if model::needs_login(&message) => {
-                        root.add_toast(
-                            adw::Toast::builder()
-                                .title(format!(
-                                    "The registry refused the push. Run {} and try again.",
-                                    model::login_command(&reference)
-                                ))
-                                .timeout(10)
-                                .build(),
-                        );
-                    }
-                    (Err(message), _) => root.add_toast(adw::Toast::new(&message)),
-                    (Ok(_), None) => {}
-                }
             }
             ImagesCmd::Done(Ok(message) | Err(message)) => {
                 if !message.is_empty() {
@@ -530,13 +469,16 @@ impl ImagesPage {
         if !running {
             widgets.search.set_search_mode(false);
         }
-        widgets
-            .content
-            .set_visible_child_name(match (self.loaded, self.images.is_empty() && self.pulls.is_empty()) {
+        widgets.content.set_visible_child_name(
+            match (
+                self.loaded,
+                self.images.is_empty() && self.activity.running().next().is_none(),
+            ) {
                 (false, _) => "loading",
                 (true, true) => "empty",
                 (true, false) => "list",
-            });
+            },
+        );
 
         let sections = model::sections(
             &self.images,
@@ -587,96 +529,63 @@ impl ImagesPage {
         while let Some(child) = widgets.pull_cards.first_child() {
             widgets.pull_cards.remove(&child);
         }
-        for pull in &self.pulls {
-            widgets.pull_cards.append(&pull_card(pull, sender.input_sender()));
+        let (mut pulls, mut pushes) = (0, 0);
+        for operation in self.activity.running() {
+            match operations::kind(operation) {
+                Some(Kind::PullImage(request)) => {
+                    pulls += 1;
+                    let layers = self.layers.get(&operation.id).map_or(&[][..], Vec::as_slice);
+                    widgets
+                        .pull_cards
+                        .append(&pull_card(operation, &request.reference, layers, sender.input_sender()));
+                }
+                Some(Kind::PushImage(request)) => {
+                    pushes += 1;
+                    widgets
+                        .pull_cards
+                        .append(&push_card(operation, &request.reference, sender.input_sender()));
+                }
+                _ => {}
+            }
         }
-        for push in &self.pushes {
-            widgets.pull_cards.append(&push_card(push, sender.input_sender()));
-        }
-        widgets
-            .transfers_title
-            .set_label(match (self.pulls.is_empty(), self.pushes.is_empty()) {
-                (false, false) => "Pulling and pushing",
-                (true, false) => "Pushing",
-                _ => "Pulling",
-            });
-        widgets
-            .pulling
-            .set_visible(!self.pulls.is_empty() || !self.pushes.is_empty());
+        widgets.transfers_title.set_label(match (pulls, pushes) {
+            (_, 0) => "Pulling",
+            (0, _) => "Pushing",
+            _ => "Pulling and pushing",
+        });
+        widgets.pulling.set_visible(pulls + pushes > 0);
     }
 
-    fn pull(&mut self, sender: &ComponentSender<Self>, reference: String) {
+    fn pull(&self, sender: &ComponentSender<Self>, reference: String) {
         let reference = reference.trim().to_owned();
-        let Some(client) = self.status.running_client().cloned() else {
-            return;
-        };
-        if reference.is_empty() || self.pulls.iter().any(|pull| pull.reference == reference) {
+        if reference.is_empty() {
             return;
         }
-        let id = self.next_pull;
-        self.next_pull += 1;
-        let out = sender.command_sender().clone();
-        let request = PullImageRequest {
-            reference: reference.clone(),
-            platform: String::new(),
-        };
-        let task = relm4::spawn(async move {
-            let result = async {
-                let mut stream = client.images().pull_image(request).await?.into_inner();
-                while let Some(response) = stream.message().await? {
-                    match response.event {
-                        Some(pull_image_response::Event::Layer(layer)) => out.emit(ImagesCmd::PullLayer(id, layer)),
-                        Some(pull_image_response::Event::Pulled(pulled)) => return Ok(pulled.reference),
-                        Some(pull_image_response::Event::Status(_)) | None => {}
-                    }
-                }
-                Err(Error::Protocol("the pull ended without an image"))
-            }
-            .await;
-            out.emit(ImagesCmd::PullDone(id, result.map_err(|error| describe(&error))));
-        });
-        self.pulls.push(Pull {
-            id,
-            reference,
-            layers: Vec::new(),
-            started: Instant::now(),
-            task,
+        self.call(sender, move |client| async move {
+            let request = PullImageRequest {
+                reference,
+                platform: String::new(),
+            };
+            operations::start(&client, Kind::PullImage(request)).await?;
+            Ok(String::new())
         });
     }
 
-    fn push(&mut self, sender: &ComponentSender<Self>, reference: String) {
-        let Some(client) = self.status.running_client().cloned() else {
+    /// Follows the layers of a pull the daemon runs, whichever client started it.
+    fn follow_pull(&self, sender: &ComponentSender<Self>, id: String) {
+        let Some(client) = self.status.client().cloned() else {
             return;
         };
-        if self.pushes.iter().any(|push| push.reference == reference) {
-            return;
-        }
-        let id = self.next_pull;
-        self.next_pull += 1;
         let out = sender.command_sender().clone();
-        let request = PushImageRequest {
-            reference: reference.clone(),
-        };
-        let task = relm4::spawn(async move {
-            let result = async {
-                let mut stream = client.images().push_image(request).await?.into_inner();
-                while let Some(response) = stream.message().await? {
-                    match response.event {
-                        Some(push_image_response::Event::Status(status)) => out.emit(ImagesCmd::PushStatus(id, status)),
-                        Some(push_image_response::Event::Pushed(pushed)) => return Ok(pushed.digest),
-                        None => {}
-                    }
+        relm4::spawn(async move {
+            let _ = operations::follow(&client, &id, |event| {
+                if let FollowEvent::PullImage(response) = event
+                    && let Some(pull_image_response::Event::Layer(layer)) = response.event
+                {
+                    out.emit(ImagesCmd::PullLayer(id.clone(), layer));
                 }
-                Err(Error::Protocol("the push ended without an image"))
-            }
+            })
             .await;
-            out.emit(ImagesCmd::PushDone(id, result.map_err(|error| describe(&error))));
-        });
-        self.pushes.push(Push {
-            id,
-            reference,
-            status: "Starting…".to_owned(),
-            task,
         });
     }
 
@@ -844,9 +753,17 @@ fn untagged_row(count: usize, size: u64) -> gtk::ListBoxRow {
     gtk::ListBoxRow::builder().child(&content).activatable(false).build()
 }
 
-fn pull_card(pull: &Pull, input: &relm4::Sender<ImagesMsg>) -> gtk::Box {
-    let (fraction, summary) = model::pull_summary(&pull.layers, pull.started.elapsed());
-    let reference = gtk::Label::builder().label(&pull.reference).xalign(0.0).build();
+fn pull_card(
+    operation: &Operation,
+    reference: &str,
+    pull_layers: &[LayerProgress],
+    input: &relm4::Sender<ImagesMsg>,
+) -> gtk::Box {
+    let elapsed = system_time(operation.started_at.as_ref())
+        .and_then(|started| SystemTime::now().duration_since(started).ok())
+        .unwrap_or_default();
+    let (fraction, summary) = model::pull_summary(pull_layers, elapsed);
+    let reference_label = gtk::Label::builder().label(reference).xalign(0.0).build();
     let summary = gtk::Label::builder()
         .label(&summary)
         .xalign(0.0)
@@ -856,12 +773,12 @@ fn pull_card(pull: &Pull, input: &relm4::Sender<ImagesMsg>) -> gtk::Box {
         .orientation(gtk::Orientation::Vertical)
         .hexpand(true)
         .build();
-    text.append(&reference);
+    text.append(&reference_label);
     text.append(&summary);
-    let cancel = icon_button("window-close-symbolic", &format!("Stop pulling {}", pull.reference));
-    let id = pull.id;
+    let cancel = icon_button("window-close-symbolic", &format!("Stop pulling {reference}"));
+    let id = operation.id.clone();
     let input = input.clone();
-    cancel.connect_clicked(move |_| input.emit(ImagesMsg::CancelPull(id)));
+    cancel.connect_clicked(move |_| input.emit(ImagesMsg::Cancel(id.clone())));
     let top = gtk::Box::builder().spacing(12).build();
     top.append(&text);
     top.append(&cancel);
@@ -880,7 +797,7 @@ fn pull_card(pull: &Pull, input: &relm4::Sender<ImagesMsg>) -> gtk::Box {
         .row_spacing(6)
         .css_classes(["pull-layers"])
         .build();
-    for (row, layer) in pull.layers.iter().map(model::layer_view).enumerate() {
+    for (row, layer) in pull_layers.iter().map(model::layer_view).enumerate() {
         let row = i32::try_from(row).unwrap_or(i32::MAX);
         let id = gtk::Label::builder()
             .label(&layer.id)
@@ -912,7 +829,7 @@ fn pull_card(pull: &Pull, input: &relm4::Sender<ImagesMsg>) -> gtk::Box {
         .css_classes(["card"])
         .build();
     card.append(&head);
-    if !pull.layers.is_empty() {
+    if !pull_layers.is_empty() {
         card.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
         card.append(&layers);
     }
@@ -953,10 +870,14 @@ fn install_actions(root: &adw::ToastOverlay, sender: &ComponentSender<ImagesPage
     root.insert_action_group("images", Some(&actions));
 }
 
-fn push_card(push: &Push, input: &relm4::Sender<ImagesMsg>) -> gtk::Box {
-    let reference = gtk::Label::builder().label(&push.reference).xalign(0.0).build();
+fn push_card(operation: &Operation, reference: &str, input: &relm4::Sender<ImagesMsg>) -> gtk::Box {
+    let reference_label = gtk::Label::builder().label(reference).xalign(0.0).build();
+    let latest = operation
+        .progress
+        .as_ref()
+        .map_or("Starting…", |progress| progress.message.as_str());
     let status = gtk::Label::builder()
-        .label(&push.status)
+        .label(latest)
         .xalign(0.0)
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .css_classes(["dim-label", "group-description"])
@@ -965,12 +886,12 @@ fn push_card(push: &Push, input: &relm4::Sender<ImagesMsg>) -> gtk::Box {
         .orientation(gtk::Orientation::Vertical)
         .hexpand(true)
         .build();
-    text.append(&reference);
+    text.append(&reference_label);
     text.append(&status);
-    let cancel = icon_button("window-close-symbolic", &format!("Stop pushing {}", push.reference));
-    let id = push.id;
+    let cancel = icon_button("window-close-symbolic", &format!("Stop pushing {reference}"));
+    let id = operation.id.clone();
     let input = input.clone();
-    cancel.connect_clicked(move |_| input.emit(ImagesMsg::CancelPush(id)));
+    cancel.connect_clicked(move |_| input.emit(ImagesMsg::Cancel(id.clone())));
     let top = gtk::Box::builder().spacing(12).build();
     top.append(&adw::Spinner::new());
     top.append(&text);
@@ -1074,6 +995,20 @@ fn confirm_prune(parent: &adw::ToastOverlay, input: &relm4::Sender<ImagesMsg>) {
 }
 
 fn follow(daemon: &Daemon, sender: &ComponentSender<ImagesPage>) {
+    let mut activity = daemon.subscribe_activity();
+    sender.command(move |out, shutdown| {
+        shutdown
+            .register(async move {
+                loop {
+                    out.emit(ImagesCmd::Activity(Box::new(activity.borrow_and_update().clone())));
+                    if activity.changed().await.is_err() {
+                        return;
+                    }
+                }
+            })
+            .drop_on_shutdown()
+    });
+
     let mut status = daemon.subscribe();
     sender.command(move |out, shutdown| {
         shutdown

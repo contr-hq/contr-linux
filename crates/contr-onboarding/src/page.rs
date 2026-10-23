@@ -1,9 +1,13 @@
 use contr_core::product;
-use contr_daemon_ui::{Daemon, SettingsHandle, Status, describe, failure, remediation_label, run_remediation};
+use contr_daemon_ui::operations::{self, Activity, FollowEvent, Kind};
+use contr_daemon_ui::{Daemon, SettingsHandle, Status, describe, remediation_label};
 use contr_sdk::Error;
 use contr_sdk::api::common::v1::{Progress, Remediation};
-use contr_sdk::api::diagnostics::v1::{Check, RemediationOutcome, RunChecksRequest};
+use contr_sdk::api::diagnostics::v1::{
+    Check, RemediationOutcome, RunChecksRequest, RunRemediationRequest, run_remediation_response,
+};
 use contr_sdk::api::engine::v1::EngineState;
+use contr_sdk::api::operations::v1::OperationState;
 use contr_ui_common::session;
 use contr_ui_common::widgets::{StatusKind, boxed_list, status_icon};
 use relm4::adw::{self, prelude::*};
@@ -16,11 +20,14 @@ type Input = relm4::Sender<OnboardingMsg>;
 
 /// First-run setup: the engine the daemon manages, the fixes that make it usable, and the log out some of them need.
 pub struct OnboardingPage {
+    daemon: Daemon,
     status: Status,
     checks: Vec<Check>,
     /// The connection and engine state the last checks ran for.
     checked_for: Option<(u64, EngineState)>,
     fixing: Option<Remediation>,
+    /// The fix operation the page shows, whichever client started it.
+    followed: Option<String>,
     steps: Steps,
     finish: Option<Finish>,
     release_check_note: Option<String>,
@@ -43,6 +50,8 @@ pub enum OnboardingOutput {
 #[derive(Debug)]
 pub enum OnboardingCmd {
     Status(Box<Status>),
+    Activity(Box<Activity>),
+    Started(Result<String, String>),
     Checks(Result<Vec<Check>, String>),
     ReleaseCheckNote(Option<String>),
     Progress(Progress),
@@ -183,9 +192,11 @@ impl Component for OnboardingPage {
 
         let model = OnboardingPage {
             status: daemon.status(),
+            daemon,
             checks: Vec::new(),
             checked_for: None,
             fixing: None,
+            followed: None,
             steps: Steps::default(),
             finish: None,
             release_check_note: None,
@@ -250,12 +261,32 @@ impl Component for OnboardingPage {
                     self.load_release_check_note(&sender);
                 }
             }
+            OnboardingCmd::Activity(activity) => {
+                let running = activity.running_where(|kind| matches!(kind, Kind::RunRemediation(_)));
+                if let Some(operation) = running
+                    && self.followed.as_ref() != Some(&operation.id)
+                    && let Some(Kind::RunRemediation(request)) = operations::kind(operation)
+                {
+                    self.fixing = Some(Remediation {
+                        action_id: request.action_id.clone(),
+                        requires_elevation: false,
+                    });
+                    let id = operation.id.clone();
+                    self.follow_fix(&sender, id);
+                }
+            }
+            OnboardingCmd::Started(Ok(id)) => self.follow_fix(&sender, id),
+            OnboardingCmd::Started(Err(message)) => {
+                self.fixing = None;
+                root.add_toast(adw::Toast::new(&message));
+            }
             OnboardingCmd::ReleaseCheckNote(note) => self.release_check_note = note,
             OnboardingCmd::Checks(Ok(checks)) => self.checks = checks,
             OnboardingCmd::Checks(Err(message)) => root.add_toast(adw::Toast::new(&message)),
             OnboardingCmd::Progress(progress) => self.steps.push(progress),
             OnboardingCmd::Fixed(result) => {
                 self.fixing = None;
+                self.followed = None;
                 match result {
                     Ok(outcome) => {
                         self.finish = model::finish(outcome);
@@ -302,16 +333,54 @@ impl OnboardingPage {
         let Some(client) = self.status.client().cloned() else {
             return;
         };
-        self.fixing = Some(remediation.clone());
+        let request = RunRemediationRequest {
+            action_id: remediation.action_id.clone(),
+        };
+        self.fixing = Some(remediation);
+        self.steps = Steps::default();
+        sender.oneshot_command(async move {
+            let started = operations::start(&client, Kind::RunRemediation(request)).await;
+            OnboardingCmd::Started(started.map(|operation| operation.id).map_err(|error| describe(&error)))
+        });
+    }
+
+    /// Shows the steps of fix operation `id` from its start, then how it ended, which the page reports itself.
+    fn follow_fix(&mut self, sender: &ComponentSender<Self>, id: String) {
+        let Some(client) = self.status.client().cloned() else {
+            return;
+        };
+        if self.followed.as_ref() == Some(&id) {
+            return;
+        }
+        self.daemon.claim(&id);
+        self.followed = Some(id.clone());
         self.steps = Steps::default();
         let out = sender.command_sender().clone();
         relm4::spawn(async move {
-            let result = run_remediation(client, &remediation, |progress| {
-                out.emit(OnboardingCmd::Progress(progress));
+            let mut outcome = RemediationOutcome::default();
+            let finished = operations::follow(&client, &id, |event| {
+                let FollowEvent::RunRemediation(response) = event else {
+                    return;
+                };
+                match response.event {
+                    Some(run_remediation_response::Event::Progress(progress)) => {
+                        out.emit(OnboardingCmd::Progress(progress));
+                    }
+                    Some(run_remediation_response::Event::Outcome(then)) => outcome = then,
+                    None => {}
+                }
             })
-            .await
-            .map_err(|error| failure(&error));
-            out.emit(OnboardingCmd::Fixed(result));
+            .await;
+            out.emit(OnboardingCmd::Fixed(match finished {
+                Ok(operation) => match (operation.state(), operation.error) {
+                    (OperationState::Succeeded, _) => Ok(outcome),
+                    (OperationState::Cancelled, _) => Err(None),
+                    (_, error) => Err(Some(
+                        error.map_or_else(|| "The fix stopped.".to_owned(), |error| error.message),
+                    )),
+                },
+                Err(error) => Err(Some(describe(&error))),
+            }));
         });
     }
 
@@ -605,6 +674,20 @@ fn pill(label: &str, suggested: bool) -> gtk::Button {
 }
 
 fn follow_status(daemon: &Daemon, sender: &ComponentSender<OnboardingPage>) {
+    let mut activity = daemon.subscribe_activity();
+    sender.command(move |out, shutdown| {
+        shutdown
+            .register(async move {
+                loop {
+                    out.emit(OnboardingCmd::Activity(Box::new(activity.borrow_and_update().clone())));
+                    if activity.changed().await.is_err() {
+                        return;
+                    }
+                }
+            })
+            .drop_on_shutdown()
+    });
+
     let mut status = daemon.subscribe();
     sender.command(move |out, shutdown| {
         shutdown

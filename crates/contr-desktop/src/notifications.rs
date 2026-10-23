@@ -1,4 +1,5 @@
-//! Desktop notifications for a container that stops with an error and for pulls and Compose runs that finish.
+//! Desktop notifications for a container that stops with an error and for operations that finish while the window is
+//! not in front.
 
 use contr_core::product;
 use contr_sdk::api::containers::v1::{Container, ContainerState};

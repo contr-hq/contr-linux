@@ -1,26 +1,25 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 use contr_core::{paths, product};
-use contr_daemon_ui::{
-    Daemon, EngineAction, Status, describe, engine_kind, failure, remediation_label, run_remediation,
-};
+use contr_daemon_ui::operations::{self, Activity, Kind, Operation};
+use contr_daemon_ui::{Daemon, EngineAction, Status, describe, engine_kind, remediation_label};
 use contr_sdk::api::common::v1::Remediation;
 use contr_sdk::api::containers::v1::{ContainerState, ListContainersRequest, PruneContainersRequest};
 use contr_sdk::api::daemon::v1::Capability;
 use contr_sdk::api::diagnostics::v1::{
-    Check, CheckStatus, CreateBundleRequest, RunChecksRequest, create_bundle_response,
+    Check, CheckStatus, CreateBundleRequest, RemediationOutcome, RunChecksRequest, RunRemediationRequest,
 };
-use contr_sdk::api::engine::v1::{EngineState, ResetRequest, ResetScope, reset_response};
+use contr_sdk::api::engine::v1::{EngineState, ResetScope};
 use contr_sdk::api::images::v1::{ListImagesRequest, PruneImagesRequest};
+use contr_sdk::api::operations::v1::OperationState;
 use contr_sdk::api::settings::v1::ResetSettingsRequest;
 use contr_sdk::{Client, Error};
-use contr_ui_common::widgets::{GroupHeader, boxed_list, page_column, set_status, status_icon};
+use contr_ui_common::widgets::{self, GroupHeader, boxed_list, page_column, set_status, status_icon};
 use contr_ui_common::{format, session};
 use relm4::adw::{self, prelude::*};
 use relm4::gtk::{self, gio, glib};
 use relm4::{Component, ComponentParts, ComponentSender};
-use tokio::io::AsyncWriteExt;
 
 use crate::model::{self, Problem};
 
@@ -41,12 +40,10 @@ pub struct TroubleshootPage {
     /// The connection and engine state the last checks ran for.
     checked_for: Option<(u64, EngineState)>,
     checking: bool,
-    fixing: Option<String>,
+    activity: Activity,
     logout_needed: bool,
     restart_needed: bool,
     log_source: u32,
-    /// The last step of the diagnostics bundle being saved.
-    bundling: Option<String>,
 }
 
 #[derive(Debug)]
@@ -76,12 +73,11 @@ pub enum TroubleshootOutput {
 pub enum TroubleshootCmd {
     Status(Box<Status>),
     Checks(Result<Vec<Check>, String>),
-    FixProgress(String),
-    /// `Err(None)`: the user dismissed the fix's prompt.
-    Fixed(Result<(bool, bool), Option<String>>),
+    Activity(Box<Activity>),
+    /// A fix succeeded, from this client or another.
+    Fixed(Option<RemediationOutcome>),
     Logs(String),
     CleanUpPlan(Result<(usize, usize, u64), String>),
-    BundleProgress(String),
     BundleSaved(Result<PathBuf, String>),
     Done(Result<String, String>),
 }
@@ -118,7 +114,7 @@ impl Component for TroubleshootPage {
             .title_widget(&adw::WindowTitle::new("Troubleshoot", ""))
             .build();
 
-        let alert_icon = status_icon(contr_ui_common::widgets::StatusKind::Failed, "Problem");
+        let alert_icon = status_icon(widgets::StatusKind::Failed, "Problem");
         alert_icon.set_valign(gtk::Align::Center);
         alert_icon.set_pixel_size(22);
         alert_icon.add_css_class("alert-icon");
@@ -262,11 +258,10 @@ impl Component for TroubleshootPage {
             checked_at: None,
             checked_for: None,
             checking: false,
-            fixing: None,
+            activity: Activity::default(),
             logout_needed: false,
             restart_needed: false,
             log_source: 0,
-            bundling: None,
         };
         let widgets = TroubleshootWidgets {
             alert,
@@ -297,13 +292,9 @@ impl Component for TroubleshootPage {
             TroubleshootMsg::RunChecks => self.run_checks(&sender),
             TroubleshootMsg::CreateBundle => {
                 let input = sender.input_sender().clone();
-                let date = glib::DateTime::now_local()
-                    .and_then(|now| now.format("%Y-%m-%d"))
-                    .map(String::from)
-                    .unwrap_or_default();
                 let dialog = gtk::FileDialog::builder()
                     .title("Save Diagnostics Bundle")
-                    .initial_name(model::bundle_name(&date))
+                    .initial_name(operations::todays_bundle_name())
                     .build();
                 dialog.save(
                     root.root().and_downcast_ref::<gtk::Window>(),
@@ -375,18 +366,13 @@ impl Component for TroubleshootPage {
                 sender.input_sender(),
                 TroubleshootMsg::ConfirmResetEngine,
             ),
-            TroubleshootMsg::ConfirmResetEngine => self.call(&sender, |client| async move {
-                let request = ResetRequest {
-                    scope: ResetScope::Factory.into(),
-                };
-                let mut stream = client.engine().reset(request).await?.into_inner();
-                while let Some(response) = stream.message().await? {
-                    if let Some(reset_response::Event::State(_)) = response.event {
-                        break;
-                    }
-                }
-                Ok("The engine was reset".to_owned())
-            }),
+            TroubleshootMsg::ConfirmResetEngine => {
+                let daemon = self.daemon.clone();
+                self.call(&sender, move |_| async move {
+                    daemon.start(EngineAction::Reset(ResetScope::Factory)).await?;
+                    Ok(String::new())
+                });
+            }
         }
         self.show(widgets, &sender);
     }
@@ -417,38 +403,27 @@ impl Component for TroubleshootPage {
                     Err(message) => root.add_toast(adw::Toast::new(&message)),
                 }
             }
-            TroubleshootCmd::FixProgress(message) => self.fixing = Some(message),
-            TroubleshootCmd::Fixed(result) => {
-                self.fixing = None;
-                match result {
-                    Ok((logout, restart)) => {
-                        self.logout_needed |= logout;
-                        self.restart_needed |= restart;
-                        root.add_toast(adw::Toast::new(if logout {
-                            "Done. Log out and back in to finish."
-                        } else if restart {
-                            "Done. Restart the computer to finish."
-                        } else {
-                            "Fixed"
-                        }));
-                        self.run_checks(&sender);
-                    }
-                    Err(Some(message)) => root.add_toast(adw::Toast::new(&message)),
-                    Err(None) => {}
+            TroubleshootCmd::Activity(activity) => {
+                for operation in operations::finished_since(&self.activity, &activity) {
+                    self.fixed(&sender, operation);
                 }
+                self.activity = *activity;
+            }
+            TroubleshootCmd::Fixed(outcome) => {
+                if let Some(outcome) = outcome {
+                    self.logout_needed |= outcome.logout_required;
+                    self.restart_needed |= outcome.restart_required;
+                }
+                self.run_checks(&sender);
             }
             TroubleshootCmd::Logs(text) => {
                 widgets.logs.set_text(&text);
                 return;
             }
-            TroubleshootCmd::BundleProgress(step) => self.bundling = Some(step),
-            TroubleshootCmd::BundleSaved(result) => {
-                self.bundling = None;
-                match result {
-                    Ok(path) => root.add_toast(saved_toast(root, &path)),
-                    Err(message) => root.add_toast(adw::Toast::new(&message)),
-                }
-            }
+            TroubleshootCmd::BundleSaved(result) => match result {
+                Ok(path) => root.add_toast(widgets::saved_toast(root, &path)),
+                Err(message) => root.add_toast(adw::Toast::new(&message)),
+            },
             TroubleshootCmd::CleanUpPlan(Ok((containers, images, size))) => {
                 let body = format!(
                     "{containers} stopped container{} and {images} image{} no container uses are removed ({}). Volumes stay.",
@@ -468,7 +443,11 @@ impl Component for TroubleshootPage {
             TroubleshootCmd::CleanUpPlan(Err(message)) | TroubleshootCmd::Done(Err(message)) => {
                 root.add_toast(adw::Toast::new(&message));
             }
-            TroubleshootCmd::Done(Ok(message)) => root.add_toast(adw::Toast::new(&message)),
+            TroubleshootCmd::Done(Ok(message)) => {
+                if !message.is_empty() {
+                    root.add_toast(adw::Toast::new(&message));
+                }
+            }
         }
         self.show(widgets, &sender);
     }
@@ -495,30 +474,71 @@ impl TroubleshootPage {
         });
     }
 
-    fn fix(&mut self, sender: &ComponentSender<Self>, remediation: Remediation) {
-        let Some(client) = self.client() else { return };
-        self.fixing = Some(format!("{}…", remediation_label(&remediation).trim_end_matches('…')));
-        let out = sender.command_sender().clone();
-        relm4::spawn(async move {
-            let result = run_remediation(client, &remediation, |progress| {
-                out.emit(TroubleshootCmd::FixProgress(progress.message));
-            })
-            .await
-            .map(|outcome| (outcome.logout_required, outcome.restart_required))
-            .map_err(|error| failure(&error));
-            out.emit(TroubleshootCmd::Fixed(result));
+    fn fix(&self, sender: &ComponentSender<Self>, remediation: Remediation) {
+        let request = RunRemediationRequest {
+            action_id: remediation.action_id,
+        };
+        self.call(sender, move |client| async move {
+            operations::start(&client, Kind::RunRemediation(request)).await?;
+            Ok(String::new())
         });
     }
 
-    fn save_bundle(&mut self, sender: &ComponentSender<Self>, path: PathBuf) {
-        let Some(client) = self.client() else { return };
-        self.bundling = Some("Starting…".to_owned());
+    /// Reads what the user must still do after `operation`, when it is a fix that succeeded.
+    fn fixed(&self, sender: &ComponentSender<Self>, operation: &Operation) {
+        let fix = matches!(operations::kind(operation), Some(Kind::RunRemediation(_)));
+        let Some(client) = self
+            .client()
+            .filter(|_| fix && operation.state() == OperationState::Succeeded)
+        else {
+            return;
+        };
+        let id = operation.id.clone();
         let out = sender.command_sender().clone();
         relm4::spawn(async move {
-            let result = write_bundle(client, &path, |step| out.emit(TroubleshootCmd::BundleProgress(step)))
-                .await
-                .map(|()| path);
-            out.emit(TroubleshootCmd::BundleSaved(result));
+            out.emit(TroubleshootCmd::Fixed(
+                operations::remediation_outcome(&client, &id).await,
+            ));
+        });
+    }
+
+    /// The running fix's latest step, whichever client started it.
+    fn fixing(&self) -> Option<String> {
+        let operation = self
+            .activity
+            .running_where(|kind| matches!(kind, Kind::RunRemediation(_)))?;
+        Some(match &operation.progress {
+            Some(progress) if !progress.message.is_empty() => progress.message.clone(),
+            _ => format!("{}…", operations::title(operation)),
+        })
+    }
+
+    /// The running bundle's latest step, whichever client started it.
+    fn bundling(&self) -> Option<String> {
+        let operation = self
+            .activity
+            .running_where(|kind| matches!(kind, Kind::CreateBundle(_)))?;
+        Some(match &operation.progress {
+            Some(progress) if !progress.message.is_empty() => format!("{}…", progress.message),
+            _ => "Starting…".to_owned(),
+        })
+    }
+
+    /// Writes the bundle to `path` when it is whole; the bundle goes on in the daemon if the app quits first.
+    fn save_bundle(&self, sender: &ComponentSender<Self>, path: PathBuf) {
+        let Some(client) = self.client() else { return };
+        let daemon = self.daemon.clone();
+        let out = sender.command_sender().clone();
+        relm4::spawn(async move {
+            let saved = async {
+                let operation = operations::start(&client, Kind::CreateBundle(CreateBundleRequest {}))
+                    .await
+                    .map_err(|error| describe(&error))?;
+                daemon.claim(&operation.id);
+                operations::save_bundle(&client, &operation.id, &path, |_| {}).await
+            }
+            .await;
+            out.emit(TroubleshootCmd::BundleSaved(saved.map(|()| path)));
         });
     }
 
@@ -564,21 +584,23 @@ impl TroubleshootPage {
         while let Some(child) = widgets.checks.first_child() {
             widgets.checks.remove(&child);
         }
+        let fixing = self.fixing();
         for check in &self.checks {
             widgets
                 .checks
-                .append(&check_row(check, sender.input_sender(), self.fixing.is_some()));
+                .append(&check_row(check, sender.input_sender(), fixing.is_some()));
         }
         widgets.checks.set_visible(!self.checks.is_empty());
         widgets
             .reset_engine
             .set_visible(self.status.has(Capability::Reset) && self.status.engine != EngineState::Unspecified);
+        let bundling = self.bundling();
         widgets
             .bundle
-            .set_subtitle(self.bundling.as_deref().unwrap_or(BUNDLE_DESCRIPTION));
+            .set_subtitle(bundling.as_deref().unwrap_or(BUNDLE_DESCRIPTION));
         widgets
             .bundle_button
-            .set_sensitive(self.bundling.is_none() && self.client().is_some());
+            .set_sensitive(bundling.is_none() && self.client().is_some());
     }
 
     fn show_problem(&self, widgets: &TroubleshootWidgets, problem: Option<&Problem>, sender: &ComponentSender<Self>) {
@@ -602,7 +624,7 @@ impl TroubleshootPage {
         widgets.alert_code.set_label(code.unwrap_or_default());
         widgets.alert_code.set_visible(code.is_some());
 
-        if let Some(message) = &self.fixing {
+        if let Some(message) = &self.fixing() {
             let busy = gtk::Box::builder().spacing(8).build();
             busy.append(&adw::Spinner::new());
             busy.append(
@@ -795,62 +817,6 @@ fn log_out(root: &adw::ToastOverlay) {
     });
 }
 
-/// Streams the daemon's bundle into a temporary file, then copies it to `path`, so a bundle that fails midway leaves
-/// no zip there. A sandboxed client may write only `path` itself, so the temporary file is not beside it.
-async fn write_bundle(client: Client, path: &Path, progress: impl Fn(String)) -> Result<(), String> {
-    let temporary = std::env::temp_dir().join(format!("{}-diagnostics-{}.zip.part", product::SLUG, std::process::id()));
-    let result = async {
-        let mut file = tokio::fs::File::create(&temporary)
-            .await
-            .map_err(|error| error.to_string())?;
-        let rpc = |status: tonic::Status| describe(&Error::from(status));
-        let mut stream = client
-            .diagnostics()
-            .create_bundle(CreateBundleRequest {})
-            .await
-            .map_err(rpc)?
-            .into_inner();
-        while let Some(response) = stream.message().await.map_err(rpc)? {
-            match response.event {
-                Some(create_bundle_response::Event::Progress(step)) => progress(step.message),
-                Some(create_bundle_response::Event::Chunk(bytes)) => {
-                    file.write_all(&bytes).await.map_err(|error| error.to_string())?;
-                }
-                None => {}
-            }
-        }
-        file.flush().await.map_err(|error| error.to_string())?;
-        if let Err(error) = tokio::fs::copy(&temporary, path).await {
-            let _ = tokio::fs::remove_file(path).await;
-            return Err(error.to_string());
-        }
-        Ok(())
-    }
-    .await;
-    let _ = tokio::fs::remove_file(&temporary).await;
-    result
-}
-
-fn saved_toast(root: &adw::ToastOverlay, path: &Path) -> adw::Toast {
-    let name = path
-        .file_name()
-        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
-    let toast = adw::Toast::builder()
-        .title(format!("Saved {name}"))
-        .button_label("Show in Files")
-        .build();
-    let root = root.clone();
-    let file = gio::File::for_path(path);
-    toast.connect_button_clicked(move |_| {
-        gtk::FileLauncher::new(Some(&file)).open_containing_folder(
-            root.root().and_downcast_ref::<gtk::Window>(),
-            gio::Cancellable::NONE,
-            |_| {},
-        );
-    });
-    toast
-}
-
 /// Stopped containers, unused images and the bytes the images take.
 async fn clean_up_plan(client: &Client) -> Result<(usize, usize, u64), Error> {
     let containers = client
@@ -950,6 +916,22 @@ fn journal_line(line: &str) -> Option<String> {
 }
 
 fn follow(daemon: &Daemon, sender: &ComponentSender<TroubleshootPage>) {
+    let mut activity = daemon.subscribe_activity();
+    sender.command(move |out, shutdown| {
+        shutdown
+            .register(async move {
+                loop {
+                    out.emit(TroubleshootCmd::Activity(Box::new(
+                        activity.borrow_and_update().clone(),
+                    )));
+                    if activity.changed().await.is_err() {
+                        return;
+                    }
+                }
+            })
+            .drop_on_shutdown()
+    });
+
     let mut status = daemon.subscribe();
     sender.command(move |out, shutdown| {
         shutdown

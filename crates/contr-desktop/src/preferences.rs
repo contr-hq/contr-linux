@@ -148,7 +148,7 @@ fn general(state: &Rc<Dialog>, context: &PreferencesContext, status: &Status) ->
         settings.notify.container_errors = active;
     });
     let finished = adw::SwitchRow::builder()
-        .title("When a pull or compose up finishes")
+        .title("When a pull, Compose action or other task finishes")
         .active(context.settings.borrow().notify.finished)
         .build();
     bind_client(&finished, &context.settings, state, |settings, active| {
